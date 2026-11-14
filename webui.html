@@ -2,577 +2,868 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>RG Display Controller</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0c">
+<title>RG Display</title>
 <style>
+:root{
+  color-scheme:dark;
+  --bg:#0b0b0c;--surface:#141416;--surface-2:#1b1b1e;--surface-3:#232327;
+  --border:#2a2a2f;--border-strong:#3a3a40;
+  --text:#ececee;--muted:#8d8d95;--faint:#5c5c63;
+  --accent:#e5383b;--accent-hover:#c92a2d;--accent-soft:rgba(229,56,59,.14);
+  --ok:#3ecf6e;--warn:#f0b429;--bad:#e5383b;
+  --led:#ffa31a;--led-glow:rgba(255,150,20,.55);--led-off:rgba(255,150,30,.07);
+  --radius:12px;--radius-sm:8px;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#000;color:#eee;min-height:100vh;padding:0 16px 60px;max-width:900px;margin:0 auto}
-h2{margin:16px 0 8px;color:#e33;font-size:1.1rem}
-.card{background:#0d0d0d;border:1px solid #222;border-radius:8px;padding:12px;margin-bottom:6px}
-.card:hover{border-color:#444}
-.card-title{font-weight:600;font-size:.95rem}
-.card-sub{color:#888;font-size:.8rem;margin-top:2px}
-.card-actions{display:flex;gap:6px;margin-top:6px;align-items:center}
-button,.btn{padding:7px 14px;border:none;border-radius:6px;cursor:pointer;font-size:.82rem;transition:.15s}
-.btn-primary{background:#e33;color:#fff}
-.btn-primary:hover{background:#c22}
-.btn-danger{background:#c33;color:#fff}.btn-danger:hover{background:#b22}
-.btn-secondary{background:#333;color:#eee}.btn-secondary:hover{background:#444}
-.btn-sm{padding:3px 8px;font-size:.75rem}
-.btn-icon{background:none;border:none;color:#888;cursor:pointer;padding:1px 5px;font-size:1rem}
-.btn-icon:hover{color:#e33}
-.btn-link{background:none;border:none;color:#e33;cursor:pointer;padding:0;font-size:inherit;text-decoration:underline}
-form label{display:block;margin:6px 0 2px;color:#999;font-size:.8rem}
-form input,form select,form textarea{width:100%;padding:7px;background:#111;border:1px solid #333;border-radius:4px;color:#eee;font-size:.88rem}
-form textarea{font-family:monospace;resize:vertical}
-form input:focus,form select:focus,form textarea:focus{outline:none;border-color:#e33}
+html{-webkit-text-size-adjust:100%}
+body{font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:0 16px calc(48px + env(safe-area-inset-bottom));max-width:860px;margin:0 auto}
+button,input,select{font:inherit;color:inherit}
+svg.i{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.fill{fill:currentColor;stroke:none}
 .hidden{display:none!important}
-.row{display:flex;gap:10px}.row>*{flex:1}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.stat{padding:6px 10px;background:#111;border-radius:4px}
-.stat-label{color:#888;font-size:.75rem}
-.stat-val{font-size:.95rem;font-weight:600;margin-top:1px}
-.stat-val.ok{color:#4c4}.stat-val.warn{color:#e33}
-.flash{color:#e33;font-weight:bold;animation:blink .8s infinite}
-@keyframes blink{50%{opacity:0}}
-.empty{text-align:center;color:#444;padding:20px;font-size:.85rem}
-.gap{margin-top:12px}
-.section{border:1px solid #222;border-radius:8px;padding:12px;margin-bottom:10px;background:#0a0a0a;overflow:hidden}
-.section-title{color:#e33;font-size:.95rem;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+
+/* header */
+.top{display:flex;align-items:center;gap:10px;padding:14px 0 12px;flex-wrap:wrap}
+.brand{font-weight:700;font-size:1.15rem;letter-spacing:.2px;display:flex;align-items:center;gap:8px;margin-right:auto}
+.brand b{color:var(--accent)}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--border);font-size:.8rem;color:var(--muted);white-space:nowrap}
+.pill .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.pill.ok .dot{background:var(--ok)}.pill.warn .dot{background:var(--warn)}.pill.bad .dot{background:var(--bad)}
+.pill strong{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.card-head h2{font-size:1rem;font-weight:650;margin-right:auto;display:flex;align-items:center;gap:8px}
+.count{color:var(--muted);font-weight:500;font-size:.85rem}
+.tag{font-size:.72rem;font-weight:600;letter-spacing:.4px;text-transform:uppercase;padding:3px 8px;border-radius:6px;background:var(--surface-3);color:var(--muted)}
+.tag.ov{background:var(--accent-soft);color:var(--accent)}
+.tag.q{background:rgba(62,207,110,.12);color:var(--ok)}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:0 14px;border-radius:var(--radius-sm);border:1px solid var(--border-strong);background:var(--surface-2);cursor:pointer;font-size:.88rem;font-weight:550;transition:background .12s,border-color .12s,transform .05s;white-space:nowrap;user-select:none;-webkit-user-select:none}
+.btn:hover{background:var(--surface-3)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.danger{color:#ff6b6e;border-color:rgba(229,56,59,.45);background:transparent}
+.btn.danger:hover{background:var(--accent-soft)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{background:var(--surface-2);color:var(--text)}
+.btn.sm{min-height:32px;padding:0 10px;font-size:.82rem}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:var(--radius-sm);border:none;background:transparent;color:var(--muted);cursor:pointer}
+.icon-btn:hover{background:var(--surface-3);color:var(--text)}
+.icon-btn.on{color:var(--accent)}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.spacer{flex:1}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* LED preview */
+.led{position:relative;width:100%;aspect-ratio:6/1;background-color:#060606;border-radius:6px;border:1px solid #000;box-shadow:inset 0 0 0 1px #1d1d1d,0 0 0 4px #111;overflow:hidden;
+  background-image:radial-gradient(circle,var(--led-off) 38%,transparent 44%);background-size:calc(var(--u,6px)) calc(var(--u,6px));--u:6px}
+.led-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:.8rem;letter-spacing:.5px}
+.seg{position:absolute;overflow:hidden;white-space:nowrap;color:var(--led);text-shadow:0 0 calc(var(--u)*.9) var(--led-glow);
+  font-family:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,monospace;display:flex;align-items:center;line-height:1}
+.seg>span{display:block;min-width:100%}
+.seg.a0>span{text-align:left}.seg.a1>span{text-align:center}.seg.a2>span{text-align:right}
+.seg{transform-origin:top left}
+.seg.f1,.seg.f5{font-weight:500}.seg.f4{font-weight:300}.seg.f2,.seg.f3,.seg.f6,.seg.f7{font-weight:800}
+.seg.scroll>span{min-width:0;display:inline-block;padding-left:100%;animation:marquee var(--dur,8s) linear infinite}
+@keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+@media (prefers-reduced-motion:reduce){.seg.scroll>span{animation:none;padding-left:0}}
+.led-note{color:var(--faint);font-size:.72rem;margin-top:6px}
+
+.now-meta{display:flex;justify-content:space-between;gap:10px;margin:12px 0 6px;align-items:baseline}
+.now-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.now-time{color:var(--muted);font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.progress{height:4px;border-radius:2px;background:var(--surface-3);overflow:hidden;margin-bottom:12px}
+.progress>div{height:100%;width:0;background:var(--accent);transition:width .25s linear}
+.banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:12px;font-size:.88rem}
+.banner.ov{background:var(--accent-soft);border:1px solid rgba(229,56,59,.35)}
+.banner.ov strong{color:#ff7a7c}
+.banner.warn{background:rgba(240,180,41,.1);border:1px solid rgba(240,180,41,.35);color:#f5c65a}
+.banner .spacer{flex:1}
+
+/* queue */
+.qlist{list-style:none;display:flex;flex-direction:column;gap:6px}
+.qi{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 4px;border-radius:var(--radius-sm);background:var(--surface-2);border:1px solid var(--border);transition:border-color .12s,background .12s}
+.qi:hover{border-color:var(--border-strong)}
+.qi.current{border-color:rgba(229,56,59,.6);background:linear-gradient(90deg,var(--accent-soft),var(--surface-2) 60%)}
+.qi.is-hidden .qi-main{opacity:.45}
+.qi.dragging{opacity:.85;border-color:var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.5);position:relative;z-index:2}
+.handle{cursor:grab;color:var(--faint);touch-action:none;display:flex;align-items:center;padding:8px 2px;border-radius:6px}
+.handle:hover{color:var(--muted)}
+.qi.dragging .handle{cursor:grabbing}
+.num{color:var(--faint);font-size:.8rem;width:1.4em;text-align:right;font-variant-numeric:tabular-nums;flex:none}
+.qi-main{flex:1;min-width:0;cursor:pointer}
+.qi-title{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qi-title .placeholder{color:var(--muted);font-weight:400;font-style:italic}
+.qi-sub{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:3px;font-size:.76rem;color:var(--muted)}
+.chip{padding:1px 7px;border-radius:5px;background:var(--surface-3);color:var(--muted);font-size:.72rem;white-space:nowrap}
+.chip.air{background:var(--accent);color:#fff;font-weight:600}
+.chip.sched{background:rgba(240,180,41,.12);color:#f0c050}
+.chip.sched.off{background:var(--surface-3);color:var(--faint);text-decoration:line-through}
+.qi-actions{display:flex;gap:2px;flex:none}
+.empty{text-align:center;color:var(--muted);padding:28px 10px;font-size:.9rem}
+.empty .btn{margin-top:12px}
+
+/* forms */
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px 12px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field.wide{grid-column:1/-1}
+.field>span{font-size:.78rem;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
+.field>span em{font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums}
+.field>span em.over{color:var(--bad)}
+.field input,.field select{width:100%;min-height:40px;padding:8px 10px;background:var(--bg);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:.92rem}
+.field input:focus,.field select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.field input:disabled{opacity:.45}
+.check{display:flex;align-items:center;gap:10px;min-height:40px;cursor:pointer;font-size:.9rem;align-self:end}
+.check input{width:18px;height:18px;accent-color:var(--accent);flex:none}
+.note{color:var(--muted);font-size:.84rem;margin-bottom:10px}
+.hint{color:var(--faint);font-size:.75rem}
+.fieldset{border-top:1px solid var(--border);margin-top:14px;padding-top:12px}
+.fieldset>h3{font-size:.78rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;margin-bottom:10px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:.86rem}
+.kv dt{color:var(--muted)}.kv dd{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+
+/* dialogs */
+dialog{margin:auto;border:1px solid var(--border-strong);border-radius:16px;background:var(--surface);color:var(--text);width:min(640px,calc(100vw - 16px));max-height:calc(100dvh - 24px);padding:0;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+dialog::backdrop{background:rgba(0,0,0,.65);backdrop-filter:blur(2px)}
+dialog form{display:flex;flex-direction:column;max-height:calc(100dvh - 26px)}
+.dlg-head{display:flex;align-items:center;gap:6px;padding:14px 14px 10px 18px;border-bottom:1px solid var(--border)}
+.dlg-head h2{font-size:1.05rem;margin-right:auto}
+.dlg-body{padding:14px 18px;overflow-y:auto;flex:1}
+.dlg-foot{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 18px;border-top:1px solid var(--border);background:var(--surface)}
+.dlg-foot .field{flex-direction:row;align-items:center}
+.dlg-foot select{min-height:38px;padding:0 8px;background:var(--bg);border:1px solid var(--border-strong);border-radius:var(--radius-sm)}
+.preview-box{margin-bottom:14px}
+
+/* toasts */
+#toasts{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;z-index:100;width:max-content;max-width:calc(100vw - 32px)}
+.toast{padding:10px 14px;border-radius:10px;background:#26262b;border:1px solid var(--border-strong);font-size:.88rem;box-shadow:0 8px 24px rgba(0,0,0,.5);animation:tin .18s ease-out}
+.toast.err{border-color:rgba(229,56,59,.6);color:#ff8f91}
+@keyframes tin{from{opacity:0;transform:translateY(6px)}}
+
+@media (max-width:560px){
+  body{padding:0 10px 48px}
+  .card{padding:12px}
+  .qi-actions .act-hide,.qi-actions .act-del{display:none}
+  .toolbar .btn .lbl{display:none}
+  .toolbar .btn{padding:0 12px}
+  .toolbar #btn-override .lbl{display:inline}
+  .toolbar{gap:6px}.toolbar .spacer{display:none}
+  .dlg-foot .spacer{flex-basis:100%;height:0}
+  .dlg-foot [data-close],.dlg-foot [type=submit]{flex:1}
+  .dlg-foot #edit-show{flex:1}
+  dialog{width:100vw;max-width:100vw;max-height:100dvh;height:100dvh;border-radius:0;border:none}
+  dialog form{max-height:100dvh;height:100%}
+}
 </style>
 </head>
 <body>
 
-<h2>RG Display</h2>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6.5 4.5h4v15h-4zM13.5 4.5h4v15h-4z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 4.5v15l11-7.5zM16.5 4.5h3v15h-3z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M17.9 17.9A10 10 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9 9 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2M1 1l22 22"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4-4L14 6l7 7-8 8zM10 10l7 7M7 21h14"/></symbol>
+</svg>
 
-<!-- Status -->
-<div class="grid" id="status-grid">
-  <div class="stat"><div class="stat-label">Display</div><div class="stat-val" id="s-display">—</div></div>
-  <div class="stat"><div class="stat-label">Queue</div><div class="stat-val" id="s-queue">—</div></div>
-  <div class="stat"><div class="stat-label">Position</div><div class="stat-val" id="s-pos">—</div></div>
-  <div class="stat"><div class="stat-label">Messages</div><div class="stat-val" id="s-msgs">—</div></div>
-  <div class="stat"><div class="stat-label">DHT22</div><div class="stat-val" id="s-dht22">—</div></div>
-</div>
-<div style="margin:8px 0;display:flex;gap:6px;flex-wrap:wrap">
-  <button class="btn btn-primary" onclick="testDisplay()">Test</button>
-  <button class="btn btn-secondary" onclick="fetch('/api/clear',{method:'POST'}).then(()=>loadStatus())">Clear</button>
-  <button class="btn btn-secondary" onclick="syncTime()">Sync Time</button>
-  <button class="btn btn-secondary" onclick="toggleSettings()">Settings</button>
-</div>
-
-<!-- Settings (collapsible) -->
-<div id="settings-panel" class="section hidden">
-  <div class="section-title">Settings</div>
-  <form onsubmit="saveSettings();return false">
-    <label>Display Number <input id="s-display-num" type="number" value="29" min="1" max="31"></label>
-    <label>Preset Gap (ms) <input id="s-gap" type="number" value="100" min="10" max="1000"></label>
-    <label>Keepalive (sec) <input id="s-keepalive" type="number" value="60" min="5" max="300"></label>
-    <label><input id="s-queue-running" type="checkbox" checked> Queue running</label>
-    <label><input id="s-random-mode" type="checkbox"> Random order</label>
-    <button type="submit" class="btn btn-primary gap">Save</button>
-  </form>
-</div>
-
-<!-- Messages -->
-<div class="section">
-  <div class="section-title">
-    <span>Messages <span style="color:#888;font-size:.8rem" id="msg-count">(0)</span></span>
-    <button class="btn btn-sm btn-primary" onclick="showMsgEditor()">+ Add</button>
+<header class="top">
+  <div class="brand"><b>RG</b> Display</div>
+  <div class="pills">
+    <span class="pill" id="p-display"><span class="dot"></span><span>Connecting…</span></span>
+    <span class="pill" id="p-sensor" title="DHT22 sensor"><span class="dot"></span><span>Sensor</span></span>
+    <span class="pill" id="p-clock" title="Display clock (server time)"><strong>--:--</strong></span>
   </div>
-  <div id="msg-list"></div>
+  <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings"><svg class="i"><use href="#i-sliders"/></svg></button>
+</header>
 
-  <!-- Message editor -->
-  <div id="msg-editor" class="hidden">
-    <form onsubmit="saveMessage();return false">
-      <div class="row">
-        <label>Preset
-          <select id="f-preset" onchange="onPresetChange('f')">
-            <option value="single-static">Custom</option>
-            <option value="scrolling">Scrolling</option>
-            <option value="two-static">Two Static Lines</option>
-            <option value="top-bottom-scroll">Top Static / Bottom Scroll</option>
-            <option value="bus">Bus</option>
-            <option value="train">Train</option>
-            <option value="clock">Clock</option>
-            <option value="imieniny">Imieniny</option>
-            <option value="imieniny-static">Imieniny Static</option>
-            <option value="imieniny-scroll">Imieniny Scroll</option>
-            <option value="do-konca-roku">Do Końca Roku</option>
-            <option value="do-konca-roku-scroll">Do Końca Roku Scroll</option>
-            <option value="dht22">DHT22 Temp/Hum</option>
-          </select>
-        </label>
-      </div>
-      <div id="preset-fields"></div>
-      <div class="row">
-        <label>Duration (sec) <input id="f-duration" type="number" value="10" min="1"></label>
-        <label><input id="f-persistent" type="checkbox" checked style="width:auto;margin-top:16px"> Persistent</label>
-      </div>
-      <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <label><input id="f-schedule-enabled" type="checkbox" onchange="scheduleToggle()" style="width:auto"> Scheduled</label>
-        <label>From <input id="f-schedule-from" type="datetime-local" style="width:auto" disabled></label>
-        <label>To <input id="f-schedule-to" type="datetime-local" style="width:auto" disabled></label>
-      </div>
-      <div id="msg-length-warn" style="color:#e33;font-size:.8rem;margin-top:4px;display:none">⚠ Text too long — max 240 characters per field</div>
-      <div style="margin-top:8px;display:flex;gap:6px">
-        <button type="submit" class="btn btn-primary">Save</button>
-        <button type="button" class="btn btn-secondary" onclick="closeMsgEditor()">Cancel</button>
-      </div>
-    </form>
-  </div>
-</div>
+<div id="offline" class="banner warn hidden">Can't reach the server. Retrying…</div>
 
-<!-- Override -->
-<div class="section" id="override-section">
-  <div class="section-title">Override <span id="ov-badge" style="display:none;color:#e33;font-size:.75rem;font-weight:normal">(active)</span></div>
-  <div id="ov-form">
-    <form onsubmit="sendOverride();return false">
-      <label>Preset
-          <select id="ov-preset" onchange="onPresetChange('ov')">
-            <option value="single-static">Custom</option>
-            <option value="scrolling">Scrolling</option>
-            <option value="two-static">Two Static Lines</option>
-            <option value="top-bottom-scroll">Top Static / Bottom Scroll</option>
-            <option value="bus">Bus</option>
-            <option value="train">Train</option>
-            <option value="clock">Clock</option>
-            <option value="imieniny">Imieniny</option>
-            <option value="imieniny-static">Imieniny Static</option>
-            <option value="imieniny-scroll">Imieniny Scroll</option>
-            <option value="do-konca-roku">Do Końca Roku</option>
-            <option value="do-konca-roku-scroll">Do Końca Roku Scroll</option>
-            <option value="dht22">DHT22 Temp/Hum</option>
-            </select>
-        </label>
-      <div id="ov-fields"></div>
-      <div class="row">
-        <label>Expires (sec, 0=forever) <input id="ov-expires" type="number" value="0" min="0"></label>
-      </div>
-      <div style="margin-top:8px;display:flex;gap:6px">
-        <button type="submit" class="btn btn-primary">Send</button>
-        <button type="button" class="btn btn-danger" onclick="cancelOverride()">Cancel</button>
-      </div>
-    </form>
+<!-- Now on display -->
+<section class="card" aria-labelledby="h-now">
+  <div class="card-head">
+    <h2 id="h-now">On display</h2>
+    <span class="tag" id="now-src">—</span>
   </div>
-  <div id="ov-active" style="display:none">
-    <p style="color:#e33;font-weight:bold;margin-bottom:6px">Override active — queue paused</p>
-    <div id="ov-active-detail" style="color:#888;font-size:.85rem;margin-bottom:8px"></div>
-    <div style="display:flex;gap:6px">
-      <button type="button" class="btn btn-danger" onclick="cancelOverride()">Stop Override</button>
-      <button type="button" class="btn btn-primary" onclick="saveOverrideToQueue()">Save to Messages</button>
+  <div class="led" id="led-now" aria-label="Display preview"></div>
+  <div class="now-meta">
+    <div class="now-title" id="now-title">—</div>
+    <div class="now-time" id="now-time"></div>
+  </div>
+  <div class="progress"><div id="now-bar"></div></div>
+
+  <div class="banner ov hidden" id="ov-banner">
+    <svg class="i fill"><use href="#i-bolt"/></svg>
+    <span><strong>Override active</strong>, queue paused <span id="ov-remaining"></span></span>
+    <span class="spacer"></span>
+    <button class="btn sm" id="ov-save" title="Add the override message to the queue">Save to queue</button>
+    <button class="btn sm primary" id="ov-stop"><svg class="i fill"><use href="#i-stop"/></svg>Stop</button>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn" id="btn-play" title="Pause / resume queue rotation"><svg class="i fill"><use href="#i-pause"/></svg><span class="lbl">Pause</span></button>
+    <button class="btn" id="btn-next" title="Next message"><svg class="i fill"><use href="#i-next"/></svg><span class="lbl">Next</span></button>
+    <button class="btn primary" id="btn-override" title="Show a message immediately (override)"><svg class="i fill"><use href="#i-bolt"/></svg><span class="lbl">Show now…</span></button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btn-clear" title="Blank the display until the next update"><svg class="i"><use href="#i-eraser"/></svg><span class="lbl">Clear</span></button>
+    <button class="btn ghost" id="btn-test" title="Send a test pattern"><svg class="i"><use href="#i-monitor"/></svg><span class="lbl">Test</span></button>
+  </div>
+</section>
+
+<!-- Queue -->
+<section class="card" aria-labelledby="h-queue">
+  <div class="card-head">
+    <h2 id="h-queue">Queue <span class="count" id="q-count"></span></h2>
+    <button class="icon-btn" id="q-random" title="Random order" aria-pressed="false"><svg class="i"><use href="#i-shuffle"/></svg></button>
+    <button class="btn sm primary" id="btn-add"><svg class="i"><use href="#i-plus"/></svg>Add</button>
+  </div>
+  <ul class="qlist" id="q-list"></ul>
+</section>
+
+<!-- Message editor -->
+<dialog id="dlg-edit">
+  <form method="dialog" id="edit-form" novalidate>
+    <div class="dlg-head">
+      <h2 id="edit-title">New message</h2>
+      <button type="button" class="icon-btn" id="edit-dup" title="Duplicate"><svg class="i"><use href="#i-copy"/></svg></button>
+      <button type="button" class="icon-btn" id="edit-del" title="Delete"><svg class="i"><use href="#i-trash"/></svg></button>
+      <button type="button" class="icon-btn" data-close title="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
-  </div>
-</div>
+    <div class="dlg-body">
+      <div class="preview-box">
+        <div class="led" id="led-edit"></div>
+        <div class="led-note">Approximate preview. Real fonts and spacing differ slightly.</div>
+      </div>
+      <div class="fgrid">
+        <label class="field wide"><span>Type</span><select id="f-preset"></select></label>
+      </div>
+      <p class="note hidden" id="f-note"></p>
+      <div class="fgrid" id="f-fields" style="margin-top:10px"></div>
+
+      <div class="fieldset" id="f-queue-opts">
+        <h3>Queue</h3>
+        <div class="fgrid">
+          <label class="field"><span>Duration (s)</span><input id="f-duration" type="number" min="1" max="86400" value="10"></label>
+          <label class="check"><input type="checkbox" id="f-hidden"> Hidden</label>
+          <label class="check"><input type="checkbox" id="f-sched"> Only show between…</label>
+        </div>
+        <div class="fgrid" id="f-sched-fields" style="margin-top:8px">
+          <label class="field"><span>From</span><input id="f-from" type="datetime-local"></label>
+          <label class="field"><span>To</span><input id="f-to" type="datetime-local"></label>
+        </div>
+        <p class="hint" style="margin-top:6px">Leave a side empty for open-ended. Times use this device's clock zone.</p>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <label class="field" title="How long the override stays on">
+        <select id="f-expiry" aria-label="Override duration">
+          <option value="0">Until stopped</option>
+          <option value="30">30 s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="1800">30 min</option>
+          <option value="3600">1 h</option>
+          <option value="7200">2 h</option>
+          <option value="28800">8 h</option>
+        </select>
+      </label>
+      <button type="button" class="btn" id="edit-show"><svg class="i fill"><use href="#i-bolt"/></svg>Show now</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary" id="edit-save">Add to queue</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Settings -->
+<dialog id="dlg-settings">
+  <form method="dialog" id="settings-form" novalidate>
+    <div class="dlg-head">
+      <h2>Settings</h2>
+      <button type="button" class="icon-btn" data-close title="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="dlg-body">
+      <div class="fgrid">
+        <label class="field"><span>Display number</span><input id="s-display-num" type="number" min="0" max="63"></label>
+        <label class="field"><span>Gap between frames (ms)</span><input id="s-gap" type="number" min="10" max="2000"></label>
+        <label class="field"><span>Keepalive (s, 0 = off)</span><input id="s-keepalive" type="number" min="0" max="3600"></label>
+      </div>
+      <p class="hint" style="margin-top:6px">Display number is set by the DIP switches inside the display. Keepalive repaints static content periodically (never interrupts scrolling).</p>
+      <div class="fgrid" style="margin-top:8px">
+        <label class="check"><input type="checkbox" id="s-queue-running"> Queue running</label>
+        <label class="check"><input type="checkbox" id="s-random-mode"> Random order</label>
+      </div>
+      <div class="fieldset">
+        <h3>Time</h3>
+        <dl class="kv">
+          <dt>Display clock</dt><dd id="t-server">—</dd>
+          <dt>This device</dt><dd id="t-local">—</dd>
+          <dt>Time zone</dt><dd id="t-tz">—</dd>
+        </dl>
+        <button type="button" class="btn sm" id="btn-sync" style="margin-top:10px">Sync from this device</button>
+      </div>
+      <div class="fieldset">
+        <h3>Hardware</h3>
+        <dl class="kv">
+          <dt>RS485</dt><dd id="h-rs485">—</dd>
+          <dt>Display</dt><dd id="h-disp">—</dd>
+          <dt>DHT22</dt><dd id="h-dht">—</dd>
+        </dl>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <button type="button" class="btn sm" id="btn-scan">Find displays</button>
+          <span class="hint" id="scan-result">Polls addresses 1–63 (about 15 s).</span>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts" aria-live="polite"></div>
 
 <script>
+'use strict';
 const $ = id => document.getElementById(id);
-const api = (method, path, body) => {
-  const opt = {method, headers:{'Content-Type':'application/json'}};
-  if(body) opt.body = JSON.stringify(body);
-  return fetch(path, opt).then(r => r.json());
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const icon = (name, fill) => `<svg class="i${fill ? ' fill' : ''}"><use href="#i-${name}"/></svg>`;
+const MAX_TEXT = 243;
+
+async function api(method, path, body) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const opt = {method, headers: {'Content-Type': 'application/json'}, signal: ctl.signal};
+    if (body !== undefined) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt);
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  } finally { clearTimeout(timer); }
+}
+function toast(msg, err) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (err ? ' err' : '');
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), err ? 5000 : 2500);
+}
+async function act(fn, okMsg) {
+  try { const r = await fn(); if (okMsg) toast(okMsg); poll(); return r; }
+  catch (e) { toast(e.message || String(e), true); }
+}
+
+// ---------- Presets ----------
+const FONTS = [[1,'1 · Small'],[2,'2 · Bold'],[3,'3 · Bold, 2-line'],[4,'4 · Thin digits, 2-line'],[5,'5 · Tall digits, 2-line'],[6,'6 · Bold tall, 2-line'],[7,'7 · Full height']];
+const TT = [[1,'Thin'],[2,'Thick']];
+const LINES = [[0,'Top'],[1,'Bottom']];
+const ALIGNS = [[0,'Left'],[1,'Center'],[2,'Right']];
+const T = (k, label, o={}) => ({k, label, type:'text', wide: o.wide !== false, ph: o.ph || '', def: ''});
+const N = (k, label, def, min, max) => ({k, label, type:'num', def, min, max});
+const S = (k, label, opts, def) => ({k, label, type:'sel', opts, def});
+const C = (k, label) => ({k, label, type:'check', def:false});
+const PRESETS = {
+  'single-static': {label:'Static text', group:'Text', fixed:{scroll:0}, fields:[
+    T('text','Text'), S('font','Font',FONTS,1), S('line','Line',LINES,0), S('alignment','Align',ALIGNS,1)]},
+  'scrolling': {label:'Scrolling text', group:'Text', fields:[
+    T('text','Text'), S('font','Font',FONTS,1), S('line','Line',LINES,0), S('alignment','Align',ALIGNS,1), N('scroll','Scroll loops',99,1,99)]},
+  'two-static': {label:'Two lines', group:'Text', fixed:{line:0}, fields:[
+    T('_l1','Top line'), S('font','Font',TT,1), S('alignment','Align',ALIGNS,0),
+    T('_l2','Bottom line'), S('_ts_font2','Font',TT,1), S('_ts_align2','Align',ALIGNS,0)]},
+  'top-bottom-scroll': {label:'Static top, scrolling bottom', group:'Text', fixed:{font:1,line:0,alignment:0}, fields:[
+    T('text','Top line'), S('_tbs_font_top','Font',TT,1), {k:'_sp',type:'gap'},
+    T('_tbs_bottom','Bottom line (scrolls)'), S('_tbs_font_bottom','Font',TT,1), N('_tbs_scroll','Scroll loops',99,1,99)]},
+  'custom': {label:'Custom (raw position)', group:'Text', fields:[
+    T('text','Text'), S('font','Font',FONTS,1), S('line','Line',LINES,0), S('alignment','Align',ALIGNS,0),
+    N('pos_x','X (px)',0,0,255), N('width','Right edge (px)',96,0,255), N('scroll','Scroll loops (0 = static)',0,0,99)]},
+  'bus': {label:'Bus', group:'Transport', fixed:{font:3,line:0,alignment:0}, fields:[
+    T('text','Route',{wide:false,ph:'190'}), T('name','Destination',{wide:false,ph:'CENTRUM'}), N('_bus_shift','Destination shift (px)',0,-60,60),
+    T('_scroll','Scrolling route',{ph:'Trasa: …'}), N('scroll','Scroll loops',99,1,99)]},
+  'train': {label:'Train', group:'Transport', fixed:{font:1,line:0,alignment:0}, fields:[
+    T('text','From',{ph:'Warszawa Wsch.-'}), S('_train_font_from','Font',TT,1), S('_train_align_from','Align',ALIGNS,0),
+    T('_train_to','To',{ph:'-Berlin Gesund.'}), S('_train_font_to','Font',TT,1), S('_train_align_to','Align',ALIGNS,2),
+    T('name','Train number',{wide:false,ph:'271'}), N('_train_shift','Number shift (px)',0,-60,60)]},
+  'clock': {label:'Clock', group:'Info', note:'Time (big, left) + date + weekday.', fixed:{text:'',name:'',font:3,line:0,alignment:0}, fields:[
+    N('_clock_shift','Date shift (px)',0,-40,40)]},
+  'dht22': {label:'DHT22 temperature / humidity', group:'Info', note:'"Temp: XX.X st." / "Wilg: XX pct." from the sensor.', fixed:{text:'',name:'',font:1,line:0,alignment:0}, fields:[]},
+  'do-konca-roku': {label:'Do końca roku', group:'Info', note:'Days left until the end of the year, on two lines.', fixed:{text:'',name:'',font:1,line:0,alignment:1}, fields:[
+    C('_dkr_split','Bigger heading (split differently, avoids clipping)')]},
+  'do-konca-roku-scroll': {label:'Do końca roku · scrolling', group:'Info', note:'"Do końca roku pozostało N dni" as one scrolling line.', fixed:{text:'',name:'',font:1,line:0,alignment:1}, fields:[]},
+  'imieniny': {label:'Imieniny · scrolling names', group:'Name days', note:'Top: IMIENINY. Bottom: all of today\'s names, scrolling.', fixed:{text:'',name:'',font:1,line:0,alignment:1}, fields:[
+    N('_imieniny_scroll','Scroll loops',99,1,99)]},
+  'imieniny-static': {label:'Imieniny · static', group:'Name days', note:'Top: IMIENINY. Bottom: 2–3 names that fit.', fixed:{text:'',name:'',font:1,line:0,alignment:1}, fields:[]},
+  'imieniny-scroll': {label:'Imieniny · one line', group:'Name days', note:'"Imieniny: …" as one scrolling line.', fixed:{text:'',name:'',font:1,line:0,alignment:1}, fields:[]},
 };
+const presetLabel = id => PRESETS[id]?.label || id || 'Custom';
 
-// ---- Font/Line/Align named options ----
-const FONT_OPTS = [
-  [1, 'Small'], [2, 'Bold'], [3, 'Bold Two-Line'],
-  [4, 'Thin Two-Line Digits'], [5, 'Tall Two-Line Digits']
-];
-const LINE_OPTS = [[0, 'Top'], [1, 'Bottom']];
-const ALIGN_OPTS = [[0, 'Left'], [1, 'Center'], [2, 'Right']];
-
-function namedSelect(name, opts, sel) {
-  return `<select id="${name}">${opts.map(([v,l]) => `<option value="${v}"${v==sel?' selected':''}>${l}</option>`).join('')}</select>`;
-}
-function toLocalDatetime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function fromLocalDatetime(str) {
-  if (!str) return 0;
-  return Math.floor(new Date(str).getTime() / 1000);
-}
-function scheduleToggle() {
-  const on = $('f-schedule-enabled').checked;
-  $('f-schedule-from').disabled = !on;
-  $('f-schedule-to').disabled = !on;
-}
-
-// ---- Unified preset field generator (prefix = 'f' for queue, 'ov' for override) ----
-function renderPresetFields(prefix, preset) {
-  const sel = (id, opts, def) => `<select id="${prefix}-${id}" style="width:auto">${opts.map(([v,l]) => `<option value="${v}"${v==def?' selected':''}>${l}</option>`).join('')}</select>`;
-  const thinThick = (n,d) => sel(`ts-font${n}`, [[1,'Thin'],[2,'Thick']], d);
-  const lcr = (n,d) => sel(`ts-align${n}`, [[0,'Left'],[1,'Center'],[2,'Right']], d);
-  const tfopts = (n,d) => sel(`train-font-${n}`, [[1,'Thin'],[2,'Thick']], d);
-  const taopts = (n,d) => sel(`train-align-${n}`, [[0,'Left'],[1,'Center'],[2,'Right']], d);
-  const tbfopts = (n) => sel(`tbs-font-${n}`, [[1,'Thin'],[2,'Thick']], 1);
-
-  const fields = {
-    'single-static': () => `
-      <label>Text <input id="${prefix}-text" placeholder="Text"></label>
-      <div class="row">
-        <label>Font ${sel('font', FONT_OPTS, 1)} <span id="${prefix}-font-warn" style="color:#e33;font-size:.7rem;display:none">(digits only)</span></label>
-        <label>Line ${sel('line', LINE_OPTS, 0)}</label>
-        <label>Align ${sel('align', ALIGN_OPTS, 1)}</label>
-      </div>`,
-    'scrolling': () => `
-      <label>Text <input id="${prefix}-text" placeholder="Scrolling text"></label>
-      <label>Scroll count <input id="${prefix}-scroll" type="number" value="99" min="1" max="99"></label>
-      <div class="row">
-        <label>Font ${sel('font', FONT_OPTS, 1)} <span id="${prefix}-font-warn" style="color:#e33;font-size:.7rem;display:none">(digits only)</span></label>
-        <label>Line ${sel('line', LINE_OPTS, 0)}</label>
-        <label>Align ${sel('align', ALIGN_OPTS, 1)}</label>
-      </div>`,
-    'two-static': () => `
-      <div class="row">
-        <label>Line 1 <input id="${prefix}-text" placeholder="Top line text"></label>
-        <label>Font ${thinThick(1,1)} Align ${lcr(1,0)}</label>
-      </div>
-      <div class="row">
-        <label>Line 2 <input id="${prefix}-text2" placeholder="Bottom line text"></label>
-        <label>Font ${thinThick(2,1)} Align ${lcr(2,0)}</label>
-      </div>`,
-    'bus': () => `
-      <div class="row">
-        <label>Route <input id="${prefix}-text" placeholder="e.g. 190" style="width:60px"></label>
-        <label>Shift <input id="${prefix}-bus-shift" type="number" value="0" style="width:60px"></label>
-        <label>Destination <input id="${prefix}-name" placeholder="e.g. CENTRUM"></label>
-      </div>
-      <div class="row">
-        <label>Scrolling route <input id="${prefix}-scroll" placeholder="Trasa: ..."></label>
-        <label>Scroll loops <input id="${prefix}-scrollcount" type="number" value="99" min="1" max="99"></label>
-      </div>`,
-    'train': () => `
-      <div class="row">
-        <label>From <input id="${prefix}-text" placeholder="e.g. Warszawa Wsch.-"></label>
-        <label>To <input id="${prefix}-train-to" placeholder="e.g. -Berlin Gesund."></label>
-      </div>
-      <div class="row">
-        <label>Font ${tfopts('from',1)} Align ${taopts('from',0)}</label>
-        <label>Font ${tfopts('to',1)} Align ${taopts('to',2)}</label>
-      </div>
-      <label>Train # <input id="${prefix}-name" type="number" placeholder="e.g. 271" min="1" style="width:80px">
-        Shift <input id="${prefix}-train-shift" type="number" value="0" style="width:60px"></label>`,
-    'clock': () => `
-      <p style="color:#888;font-size:.85rem">Time (font 3, left) + date (font 1, right) + weekday (font 1).</p>`,
-    'imieniny': () => `
-      <p style="color:#888;font-size:.85rem">Top: "IMIENINY" (font 2, centered). Bottom: scrolling names.</p>
-      <label>Scroll count <input id="${prefix}-imieniny-scroll" type="number" value="99" min="1" max="99" style="width:80px"></label>`,
-    'imieniny-static': () => `
-      <p style="color:#888;font-size:.85rem">Top: "IMIENINY" (font 2). Bottom: 2-3 names (static, centered).</p>`,
-    'imieniny-scroll': () => `
-      <p style="color:#888;font-size:.85rem">Single scrolling line: "Imieniny: &lt;names&gt;"</p>`,
-    'do-konca-roku': () => `
-      <p style="color:#888;font-size:.85rem">Top: "Do końca roku pozostało" (thin). Bottom: "&lt;count&gt; dni" (thin).</p>
-      <label><input id="${prefix}-dkr-split" type="checkbox" style="width:auto;margin-top:4px"> Split to two rows (avoids clipping)</label>`,
-    'do-konca-roku-scroll': () => `
-      <p style="color:#888;font-size:.85rem">Single scrolling line: "Do końca roku pozostało &lt;count&gt; dni"</p>`,
-    'top-bottom-scroll': () => `
-      <label>Top Line <input id="${prefix}-text" placeholder="Static text"></label>
-      <label>Font ${tbfopts('top')}</label>
-      <label>Bottom Line (scrolling) <input id="${prefix}-tbs-bottom" placeholder="Scrolling text"></label>
-      <label>Font ${tbfopts('bottom')}  Scroll count <input id="${prefix}-tbs-scroll" type="number" value="99" min="1" max="99" style="width:80px"></label>`,
-    'dht22': () => `
-      <p style="color:#888;font-size:.85rem">Temp: <span id="${prefix}-dht22-temp">...</span> °C &nbsp; Wilg: <span id="${prefix}-dht22-hum">...</span>%</p>
-      <p style="color:#555;font-size:.8rem">Top line: "Temp: XX.X st." &nbsp; Bottom line: "Wilg: XX pct."</p>`,
-  };
-  return (fields[preset] || fields['single-static'])();
-}
-function onPresetChange(prefix) {
-  const preset = $(`${prefix}-preset`).value;
-  const container = prefix === 'f' ? 'preset-fields' : `${prefix}-fields`;
-  $(container).innerHTML = renderPresetFields(prefix, preset);
-  const fontEl = $(`${prefix}-font`);
-  const warn = $(`${prefix}-font-warn`);
-  if (fontEl && warn) {
-    fontEl.onchange = () => { warn.style.display = (fontEl.value === '4' || fontEl.value === '5') ? 'inline' : 'none'; };
-    fontEl.onchange();
-  }
-  if (prefix === 'f') {
-    $(container).oninput = validateMsgLength;
-    validateMsgLength();
+function summary(m) {
+  const t = s => String(s || '').trim();
+  switch (m.preset_id) {
+    case 'bus': return [t(m.text), t(m.name)].filter(Boolean).join(' → ') || t(m._scroll);
+    case 'train': return [t(m.text) + (m._train_to ? ' ' + t(m._train_to) : ''), m.name ? '#' + t(m.name) : ''].filter(Boolean).join('  ');
+    case 'two-static': return t(m.text).split('||').map(x => x.trim()).filter(Boolean).join(' / ');
+    case 'top-bottom-scroll': return [t(m.text), t(m._tbs_bottom)].filter(Boolean).join(' / ');
+    case 'single-static': case 'scrolling': case 'custom': case undefined: return t(m.text);
+    default: return '';
   }
 }
-function validateMsgLength() {
-  const inputs = document.querySelectorAll('#preset-fields input');
-  let over = false;
-  inputs.forEach(el => { if ((el.value||'').length > 240) over = true; });
-  $('msg-length-warn').style.display = over ? 'block' : 'none';
-}
-function buildMessage(prefix, preset) {
-  const s = (id, def) => { const el = $(`${prefix}-${id}`); return el ? el.value : def; };
-  const n = (id, def) => { const v = parseInt($(`${prefix}-${id}`)?.value); return isNaN(v) ? def : v; };
-  if (preset === 'single-static' || preset === 'scrolling') {
-    const f = {text: s('text',''), font: n('font',1), line: n('line',0), alignment: n('align',1), scroll: n('scroll',0)};
-    if (preset === 'scrolling') f.scroll = n('scroll',99);
-    return f;
-  }
-  if (preset === 'two-static') {
-    const t1 = s('text','');
-    const t2 = s('text2','');
-    return {text: t1 + (t2 ? '||'+t2 : ''), font: n('ts-font1',1), alignment: n('ts-align1',0), _ts_font2: n('ts-font2',1), _ts_align2: n('ts-align2',0), line:0};
-  }
-  if (preset === 'bus') return {text: s('text',''), name: s('name',''), _scroll: s('scroll',''), scroll: n('scrollcount',99), _bus_shift: n('bus-shift',0), font:3, line:0, alignment:0};
-  if (preset === 'train') return {text: s('text',''), name: s('name',''), _train_to: s('train-to',''), _train_font_from: n('train-font-from',1), _train_font_to: n('train-font-to',1), _train_align_from: n('train-align-from',0), _train_align_to: n('train-align-to',0), _train_shift: n('train-shift',0), font:1, line:0, alignment:0};
-  if (preset === 'top-bottom-scroll') return {text: s('text',''), _tbs_bottom: s('tbs-bottom',''), _tbs_font_top: n('tbs-font-top',1), _tbs_font_bottom: n('tbs-font-bottom',1), _tbs_scroll: n('tbs-scroll',99), font:1, line:0, alignment:0};
-  if (preset === 'clock') return {text:'', name:'', font:3, line:0, alignment:0};
-  if (preset === 'imieniny') return {text:'', name:'', font:1, line:0, alignment:1, _imieniny_scroll: n('imieniny-scroll',99)};
-  if (preset === 'imieniny-static') return {text:'', name:'', font:1, line:0, alignment:1};
-  if (preset === 'imieniny-scroll') return {text:'', name:'', font:1, line:0, alignment:1};
-  if (preset === 'do-konca-roku') return {text:'', name:'', font:1, line:0, alignment:1, _dkr_split: $(`${prefix}-dkr-split`)?.checked||false};
-  if (preset === 'do-konca-roku-scroll') return {text:'', name:'', font:1, line:0, alignment:1};
-  if (preset === 'dht22') return {text:'', name:'', font:1, line:0, alignment:0};
-  return {text: s('text',''), font:3, line:0, alignment:1};
-}
-onPresetChange('f');
-onPresetChange('ov');
 
-// ---- Message editor ----
-let editingId = null;
-function showMsgEditor(msg) {
-  editingId = msg ? msg.id : null;
-  $('msg-editor').classList.remove('hidden');
-  $('f-preset').value = msg ? (msg.preset_id||'single-static') : 'single-static';
-  onPresetChange('f');
-  if(msg) setTimeout(() => fillMsgFields(msg), 50);
+// ---------- LED preview ----------
+const ro = 'ResizeObserver' in window ? new ResizeObserver(es => es.forEach(e => e.target.style.setProperty('--u', (e.contentRect.width / 96) + 'px'))) : null;
+function setupLed(el) {
+  if (ro) ro.observe(el); else el.style.setProperty('--u', (el.clientWidth / 96 || 6) + 'px');
 }
-function fillMsgFields(msg) {
-  const p = msg.preset_id;
-  if($('f-text')) $('f-text').value = msg.text ? msg.text.split('||')[0]||'' : '';
-  if($('f-text2')) $('f-text2').value = msg.text&&msg.text.includes('||') ? msg.text.split('||')[1]||'' : '';
-  if($('f-name')) $('f-name').value = (p==='bus'||p==='train') ? (msg.name||'') : '';
-  if($('f-train-to')) $('f-train-to').value = msg._train_to||'';
-  if($('f-train-font-from')) $('f-train-font-from').value = msg._train_font_from||1;
-  if($('f-train-font-to')) $('f-train-font-to').value = msg._train_font_to||1;
-  if($('f-train-align-from')) $('f-train-align-from').value = msg._train_align_from||0;
-  if($('f-train-align-to')) $('f-train-align-to').value = msg._train_align_to||0;
-  if($('f-bus-shift')) $('f-bus-shift').value = msg._bus_shift||0;
-  if($('f-train-shift')) $('f-train-shift').value = msg._train_shift||0;
-  if($('f-tbs-bottom')) $('f-tbs-bottom').value = msg._tbs_bottom||'';
-  if($('f-tbs-font-top')) $('f-tbs-font-top').value = msg._tbs_font_top||1;
-  if($('f-tbs-font-bottom')) $('f-tbs-font-bottom').value = msg._tbs_font_bottom||1;
-  if($('f-tbs-scroll')) $('f-tbs-scroll').value = msg._tbs_scroll||99;
-  if($('f-imieniny-scroll')) $('f-imieniny-scroll').value = msg._imieniny_scroll||99;
-  if($('f-dkr-split')) $('f-dkr-split').checked = msg._dkr_split||false;
-  if($('f-scroll')) {
-    if(msg.preset_id === 'bus') $('f-scroll').value = msg._scroll||'';
-    else $('f-scroll').value = msg.scroll||'';
-  }
-  if($('f-scrollcount')) $('f-scrollcount').value = msg.scroll||99;
-  if($('f-font')) $('f-font').value = msg.font||3;
-  if($('f-ts-font1')) $('f-ts-font1').value = msg.font||1;
-  if($('f-ts-font2')) $('f-ts-font2').value = msg._ts_font2||1;
-  if($('f-ts-align1')) $('f-ts-align1').value = msg.alignment||0;
-  if($('f-ts-align2')) $('f-ts-align2').value = msg._ts_align2||0;
-  if($('f-line')) $('f-line').value = msg.line||0;
-  if($('f-align')) $('f-align').value = msg.alignment||0;
-  $('f-duration').value = msg.duration_sec||10;
-  $('f-persistent').checked = msg.persistent !== false;
-  const sched = msg.schedule||{};
-  $('f-schedule-enabled').checked = sched.enabled||false;
-  $('f-schedule-from').value = toLocalDatetime(sched.from_ts);
-  $('f-schedule-to').value = toLocalDatetime(sched.to_ts);
-  scheduleToggle();
-}
-function closeMsgEditor() {
-  editingId = null;
-  $('msg-editor').classList.add('hidden');
-}
-function collectMsg() {
-  const preset = $('f-preset').value;
-  const base = {
-    id: editingId||'',
-    preset_id: preset,
-    duration_sec: parseInt($('f-duration').value)||10,
-    persistent: $('f-persistent').checked,
-    schedule: {
-      enabled: $('f-schedule-enabled').checked,
-      from_ts: fromLocalDatetime($('f-schedule-from').value),
-      to_ts: fromLocalDatetime($('f-schedule-to').value),
-    },
-    pos_x: 0, width: 96,
-  };
-  return {...base, ...buildMessage('f', preset)};
-}
-async function saveMessage() {
-  const msg = collectMsg();
-  if(editingId) await api('PUT', `/api/messages?id=${encodeURIComponent(editingId)}`, msg);
-  else await api('POST', '/api/messages', msg);
-  closeMsgEditor();
-  loadMessages();
-}
-function editMessage(id) {
-  api('GET','/api/messages').then(d => {
-    const m = (d.messages||[]).find(x => x.id === id);
-    if(m) showMsgEditor(m);
-  });
-}
-async function deleteMessage(id) {
-  await api('DELETE', `/api/messages?id=${encodeURIComponent(id)}`);
-  loadMessages();
+// font -> [advance px incl. 1px gap, glyph height px], matching the widths server.py assumes
+const GLYPH = {1:[4,7], 2:[5,7], 3:[6.2,14], 4:[5,14], 5:[5,15], 6:[6.2,15], 7:[8,16]};
+function renderLed(el, parts, emptyText) {
+  const key = JSON.stringify(parts || []) + '|' + (emptyText || '');
+  if (el._key === key) return;  // don't restart scroll animations needlessly
+  el._key = key;
+  if (!parts || !parts.length) { el.innerHTML = `<div class="led-empty">${esc(emptyText || '')}</div>`; return; }
+  el.innerHTML = parts.map(p => {
+    const f = Math.min(7, Math.max(1, p.font)), [cw, gh] = GLYPH[f], two = f >= 3;
+    const x = Math.max(0, Math.min(95, p.x));
+    const right = Math.max(x + 1, Math.min(96, p.w || 96));
+    const top = two ? 0 : (p.line ? 50 : 0), h = two ? 100 : 50;
+    // Size glyphs by advance width (monospace ~0.6em), then stretch to the LED glyph height.
+    const fs = cw / 0.6, sy = gh / (0.73 * fs);
+    const dur = Math.max(4, (p.text || '').length * 0.28 + 4);
+    p = {...p, text: String(p.text || '').replace(/\u00a0/g, '°')};  // 0xFF is the degree sign on the display
+    return `<div class="seg f${f} a${p.align}${p.scroll ? ' scroll' : ''}" style="left:${x / 96 * 100}%;width:${(right - x) / 96 * 100}%;top:${top}%;height:${h / sy}%;transform:scaleY(${sy.toFixed(3)});font-size:calc(var(--u) * ${fs.toFixed(2)});--dur:${dur}s"><span>${esc(p.text)}</span></div>`;
+  }).join('');
 }
 
-// ---- Override ----
-async function sendOverride() {
-  const preset = $('ov-preset').value;
-  const msg = {preset_id: preset, pos_x:0, width:96, ...buildMessage('ov', preset)};
-  const expires = parseInt($('ov-expires').value)||0;
-  await api('POST', '/api/override', {active:true, message:msg, expires_at: expires ? Math.floor(Date.now()/1000)+expires : 0});
-  loadStatus();
+// ---------- State ----------
+let status = null, statusAt = 0, messages = [], msgVersion = -1, autoSynced = false, dragging = false;
+const serverNow = () => status ? status.server_time + (performance.now() - statusAt) / 1000 : Date.now() / 1000;
+
+async function poll() {
+  try {
+    const d = await api('GET', '/api/status');
+    status = d; statusAt = performance.now();
+    $('offline').classList.add('hidden');
+    if (d.version !== msgVersion) await loadMessages();
+    renderStatus();
+    maybeAutoSync();
+  } catch (e) {
+    $('offline').classList.remove('hidden');
+    setPill('p-display', 'bad', 'Offline');
+  }
 }
-async function syncTime() {
-  const sec = Math.floor(Date.now() / 1000);
-  await api('POST', '/api/time', {unix_seconds: sec});
-  loadStatus();
+async function loadMessages() {
+  const d = await api('GET', '/api/messages');
+  messages = d.messages || [];
+  msgVersion = d.version ?? status?.version ?? 0;
+  if (!dragging) renderQueue();
 }
-async function cancelOverride() {
-  await api('POST','/api/cancel-override');
-  loadStatus();
-}
-async function saveOverrideToQueue() {
-  const ov = await api('GET','/api/override');
-  const msg = ov.message || {};
-  if (!msg.preset_id) return;
-  msg.duration_sec = 10;
-  msg.persistent = true;
-  msg.pos_x = 0; msg.width = 96;
-  await api('POST', '/api/messages', msg);
-  loadMessages();
-}
-async function skipTo(id) {
-  await api('POST', `/api/skip-to-message?id=${encodeURIComponent(id)}`);
+function setPill(id, cls, html) {
+  const el = $(id);
+  el.className = 'pill ' + cls;
+  el.innerHTML = `<span class="dot"></span><span>${html}</span>`;
 }
 
-// ---- Load functions ----
-async function loadStatus() {
-  const d = await api('GET','/api/status');
-  $('s-display').textContent = d.display_connected ? 'Connected' : 'No RS485';
-  $('s-display').className = 'stat-val ' + (d.display_connected ? 'ok' : 'warn');
-  $('s-queue').textContent = d.queue_running ? 'Running' : 'Paused';
-  $('s-queue').className = 'stat-val ' + (d.queue_running ? 'ok' : 'warn');
-  $('s-pos').textContent = `${d.queue_position} / ${d.messages_count}`;
-  $('s-msgs').textContent = d.override_active ? 'OVERRIDE' : (d.messages_count + ' queued');
-  $('s-msgs').className = 'stat-val ' + (d.override_active ? 'flash' : '');
-  $('s-dht22').textContent = d.dht22_ok ? (d.dht22_temp + 'C / ' + d.dht22_hum + '%') : 'No sensor';
-  $('s-dht22').className = 'stat-val ' + (d.dht22_ok ? 'ok' : 'warn');
-  for (const p of ['f','ov']) {
-    const t = $(p + '-dht22-temp');
-    const h = $(p + '-dht22-hum');
-    if (t && h) { t.textContent = d.dht22_ok ? d.dht22_temp : '--.-'; h.textContent = d.dht22_ok ? d.dht22_hum : '--'; }
-  }
-  // Override section state
-  if (d.override_active) {
-    $('ov-badge').style.display = 'inline';
-    $('ov-form').style.display = 'none';
-    $('ov-active').style.display = 'block';
-    $('ov-active-detail').textContent = 'Preset: ' + (d.override_message?.preset_id || 'unknown');
+function renderStatus() {
+  const d = status;
+  const num = d.settings.display_number;
+  if (!d.display_connected) {
+    setPill('p-display', 'warn', 'Simulation');
+    $('p-display').title = `No RS485 port (${d.display_port || 'none'}), frames are not sent`;
+  } else if (d.display_responding === false) {
+    setPill('p-display', 'warn', 'No reply');
+    $('p-display').title = `RS485 on ${d.display_port}, but display ${num} doesn't answer status polls (power, wiring, display number, or an adapter that can't receive)`;
   } else {
-    $('ov-badge').style.display = 'none';
-    $('ov-form').style.display = 'block';
-    $('ov-active').style.display = 'none';
+    setPill('p-display', 'ok', 'Display');
+    $('p-display').title = `RS485 on ${d.display_port}` + (d.display_responding ? `, display ${num} answers` + (d.display_firmware ? ` (firmware ${d.display_firmware})` : '') : '');
   }
-}
-function loadSettings() {
-  api('GET','/api/settings').then(d => {
-    $('s-display-num').value = d.display_number;
-    $('s-gap').value = d.preset_gap_ms;
-    $('s-keepalive').value = d.keepalive_sec;
-    $('s-queue-running').checked = d.queue_running;
-    $('s-random-mode').checked = d.random_mode;
+  if (d.sensor_port) setPill('p-sensor', d.dht22_ok ? 'ok' : 'bad', d.dht22_ok ? `<strong>${esc(d.dht22_temp)}°C</strong> ${esc(d.dht22_hum)}%` : 'Sensor error');
+  else $('p-sensor').classList.add('hidden');
+
+  // queue controls
+  const running = d.queue_running;
+  $('btn-play').innerHTML = running ? `${icon('pause', 1)}<span class="lbl">Pause</span>` : `${icon('play', 1)}<span class="lbl">Resume</span>`;
+  $('btn-play').classList.toggle('primary', !running);
+  $('q-random').classList.toggle('on', !!d.settings.random_mode);
+  $('q-random').setAttribute('aria-pressed', d.settings.random_mode ? 'true' : 'false');
+  $('btn-next').disabled = d.override_active;
+
+  // override
+  $('ov-banner').classList.toggle('hidden', !d.override_active);
+
+  // current
+  const c = d.current;
+  const src = $('now-src');
+  if (d.held) {
+    src.textContent = d.held === 'test' ? 'Test' : 'Cleared'; src.className = 'tag';
+    renderLed($('led-now'), [], d.held === 'test' ? `TEST ${d.settings.display_number}` : 'Blank until the next update');
+    $('now-title').textContent = d.held === 'test' ? 'Test pattern sent' : 'Display cleared';
+  } else if (c) {
+    const ov = c.source === 'override';
+    src.textContent = ov ? 'Override' : (running ? 'Queue' : 'Queue · paused');
+    src.className = 'tag ' + (ov ? 'ov' : 'q');
+    renderLed($('led-now'), c.parts, '(empty)');
+    const m = ov ? (d.override_message || {}) : (messages.find(x => x.id === c.id) || {});
+    const name = summary(m) || presetLabel(c.preset_id);
+    $('now-title').innerHTML = (ov ? '' : `<span style="color:var(--muted)">#${(c.index ?? 0) + 1}</span> `) + esc(name);
+  } else {
+    src.textContent = running ? 'Idle' : 'Paused'; src.className = 'tag';
+    renderLed($('led-now'), [], messages.length ? 'Nothing visible right now' : 'Queue is empty');
+    $('now-title').textContent = messages.length ? 'No message is visible (hidden or outside schedule)' : 'Add a message to get started';
+  }
+  // highlight in queue
+  document.querySelectorAll('.qi').forEach(li => {
+    const on = !!(c && c.source === 'queue' && li.dataset.id === c.id && !d.held);
+    li.classList.toggle('current', on);
+    li.querySelector('.chip.air')?.classList.toggle('hidden', !on);
   });
+  tickUi();
 }
-function loadMessages() {
-  api('GET','/api/messages').then(d => {
-    const msgs = d.messages||[];
-    $('msg-count').textContent = `(${msgs.length})`;
-    const list = $('msg-list');
-    if(!msgs.length) {
-      list.innerHTML = '<div class="empty">No messages.</div>';
-      return;
-    }
-    list.innerHTML = msgs.map((m,i) => {
-      const sub = m.preset_id==='clock'?'Clock':
-        m.preset_id==='bus'?(m.name?`${m.text||''} → ${m.name}`:(m.text||'Bus')):
-        m.preset_id==='train'?`${m.text||''} ${m._train_to||''}  #${m.name||''}`:
-        m.preset_id==='top-bottom-scroll'?`${(m.text||'').substring(0,20)} / ${(m._tbs_bottom||'').substring(0,20)}`:
-        m.preset_id==='two-static'?((m.text||'').split('||').filter(Boolean).join(' / ')):
-        m.preset_id==='dht22'?'DHT22 Temp/Hum':
-        m.preset_id==='scrolling'?`Scroll: ${(m.text||'').substring(0,25)}`:
-        m.preset_id==='single-static'?(m.text||'Custom'):
-        (m.text||'').substring(0,35);
-      const label = sub;
-      const pin = m.persistent ? ' <span style="color:#555">\u{1F4CC}</span>' : '';
-      const hidden = m.hidden ? ' <span style="color:#666">(hidden)</span>' : '';
-      const eyeBtn = m.hidden
-        ? '<button class="btn-icon" onclick="toggleHide(\''+m.id+'\')" title="Show">&#128064;</button>'
-        : '<button class="btn-icon" onclick="toggleHide(\''+m.id+'\')" title="Hide">&#128065;</button>';
-      return `<div class="card" draggable="true"
-        ondragstart="dragStart(event,'${m.id}')"
-        ondragover="dragOver(event)"
-        ondrop="dropMsg(event,'${m.id}')"
-        ondragend="dragEnd(event)"
-        style="${m.hidden?'opacity:.4':''}">
-        <div class="card-title"><span style="cursor:grab;margin-right:6px">&#9776;</span>${i+1}. ${label}${pin}${hidden}</div>
-        <div class="card-actions">
-          ${eyeBtn}
-          <button class="btn btn-sm btn-secondary" onclick="skipTo('${m.id}')">Skip</button>
-          <button class="btn btn-sm btn-secondary" onclick="editMessage('${m.id}')">Edit</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteMessage('${m.id}')">Del</button>
-          <span style="flex:1"></span>
-          <span style="color:#888;font-size:.75rem">${m.duration_sec||10}s</span>
+
+const fmtDur = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${m}:${String(ss).padStart(2,'0')}`; };
+function serverLocal(ts) {  // Date whose UTC fields are the display's local time
+  return new Date((ts + (status?.utc_offset_min || 0) * 60) * 1000);
+}
+function tickUi() {
+  if (!status) return;
+  const now = serverNow();
+  const sl = serverLocal(now);
+  $('p-clock').innerHTML = `<strong>${String(sl.getUTCHours()).padStart(2,'0')}:${String(sl.getUTCMinutes()).padStart(2,'0')}</strong>`;
+  const c = status.current;
+  let pct = 0, txt = '';
+  if (c && !status.held && c.until) {
+    const total = c.until - c.since, left = c.until - now;
+    pct = total > 0 ? Math.min(100, Math.max(0, (1 - left / total) * 100)) : 0;
+    txt = (c.source === 'override' ? 'ends in ' : (status.queue_running ? 'next in ' : '')) + fmtDur(left);
+    if (c.source === 'queue' && !status.queue_running) { txt = 'paused'; }
+  } else if (c && c.source === 'override') txt = 'until stopped';
+  $('now-bar').style.width = pct + '%';
+  $('now-time').textContent = txt;
+  const exp = status.override_expires_at;
+  $('ov-remaining').textContent = status.override_active ? (exp ? `· ${fmtDur(exp - now)} left` : '· until stopped') : '';
+  if ($('dlg-settings').open) fillTimeInfo();
+}
+
+// ---------- Queue list ----------
+function fmtTs(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  const time = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
+  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], {day:'numeric', month:'short'})} ${time}`;
+}
+function schedChip(m, now) {
+  const s = m.schedule || {};
+  if (!s.enabled || (!s.from_ts && !s.to_ts)) return '';
+  if (s.to_ts && now > s.to_ts) return `<span class="chip sched off" title="Schedule ended">ended ${esc(fmtTs(s.to_ts))}</span>`;
+  if (s.from_ts && now < s.from_ts) return `<span class="chip sched off" title="Not yet in its time window">from ${esc(fmtTs(s.from_ts))}</span>`;
+  return `<span class="chip sched" title="Scheduled">${s.to_ts ? 'until ' + esc(fmtTs(s.to_ts)) : 'since ' + esc(fmtTs(s.from_ts))}</span>`;
+}
+function renderQueue() {
+  $('q-count').textContent = messages.length ? `(${messages.length})` : '';
+  const list = $('q-list');
+  if (!messages.length) {
+    list.innerHTML = `<li class="empty">No messages yet.<br><button class="btn primary" onclick="openEditor('new')">${icon('plus')}Add the first one</button></li>`;
+    return;
+  }
+  const now = serverNow();
+  list.innerHTML = messages.map((m, i) => {
+    const sum = summary(m);
+    const title = sum ? esc(sum) : `<span class="placeholder">${esc(presetLabel(m.preset_id))}</span>`;
+    return `<li class="qi${m.hidden ? ' is-hidden' : ''}" data-id="${esc(m.id)}">
+      <span class="handle" title="Drag to reorder" aria-label="Drag to reorder">${icon('grip', 1)}</span>
+      <span class="num">${i + 1}</span>
+      <div class="qi-main" data-act="edit">
+        <div class="qi-title">${title}</div>
+        <div class="qi-sub">
+          <span class="chip air hidden">on air</span>
+          ${sum ? `<span class="chip">${esc(presetLabel(m.preset_id))}</span>` : ''}
+          <span>${esc(m.duration_sec || 10)} s</span>
+          ${schedChip(m, now)}
+          ${m.hidden ? '<span class="chip">hidden</span>' : ''}
         </div>
-      </div>`;
-    }).join('');
-  });
+      </div>
+      <div class="qi-actions">
+        <button class="icon-btn" data-act="play" title="Show now">${icon('play', 1)}</button>
+        <button class="icon-btn act-hide" data-act="hide" title="${m.hidden ? 'Unhide' : 'Hide from rotation'}">${icon(m.hidden ? 'eyeoff' : 'eye')}</button>
+        <button class="icon-btn" data-act="edit" title="Edit">${icon('edit')}</button>
+        <button class="icon-btn act-del" data-act="del" title="Delete">${icon('trash')}</button>
+      </div>
+    </li>`;
+  }).join('');
+  if (status) renderStatus();
 }
-let dragId = null;
-function dragStart(e, id) { dragId = id; e.dataTransfer.effectAllowed = 'move'; }
-function dragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.target.closest('.card')?.classList.add('drag-over'); }
-function dragEnd(e) { document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); }
-function dropMsg(e, id) {
+$('q-list').addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]'); if (!btn) return;
+  const id = btn.closest('.qi')?.dataset.id; const m = messages.find(x => x.id === id); if (!m) return;
+  const a = btn.dataset.act;
+  if (a === 'edit') openEditor('edit', m);
+  else if (a === 'play') act(() => api('POST', `/api/skip-to-message?id=${encodeURIComponent(id)}`));
+  else if (a === 'hide') act(() => api('PUT', `/api/messages?id=${encodeURIComponent(id)}`, {...m, hidden: !m.hidden}), m.hidden ? 'Back in rotation' : 'Hidden from rotation');
+  else if (a === 'del') deleteMsg(m);
+});
+async function deleteMsg(m) {
+  if (!confirm(`Delete "${summary(m) || presetLabel(m.preset_id)}"?`)) return false;
+  await act(() => api('DELETE', `/api/messages?id=${encodeURIComponent(m.id)}`), 'Deleted');
+  return true;
+}
+
+// drag to reorder (pointer events: works with mouse and touch)
+$('q-list').addEventListener('pointerdown', e => {
+  const h = e.target.closest('.handle'); if (!h) return;
   e.preventDefault();
-  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-  if (!dragId || dragId === id) return;
-  api('GET','/api/messages').then(d => {
-    const ids = d.messages.map(m => m.id);
-    const from = ids.indexOf(dragId);
-    const to = ids.indexOf(id);
-    if (from < 0 || to < 0) return;
-    ids.splice(from, 1);
-    ids.splice(to, 0, dragId);
-    api('POST','/api/messages/reorder', {ids}).then(() => loadMessages());
+  const li = h.closest('.qi'), list = $('q-list');
+  const before = [...list.children].map(x => x.dataset.id).join();
+  dragging = true; li.classList.add('dragging');
+  // Listen on window: re-inserting the <li> drops any pointer capture on the handle.
+  const move = ev => {
+    const sibs = [...list.querySelectorAll('.qi:not(.dragging)')];
+    const after = sibs.find(s => { const r = s.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2; });
+    if (after) { if (li.nextElementSibling !== after) list.insertBefore(li, after); }
+    else if (list.lastElementChild !== li) list.appendChild(li);
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+    li.classList.remove('dragging'); dragging = false;
+    const ids = [...list.children].map(x => x.dataset.id);
+    if (ids.join() !== before) act(() => api('POST', '/api/messages/reorder', {ids}));
+    else renderQueue();
+  };
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+});
+
+// ---------- Editor ----------
+let edMode = 'new', edOrig = null, previewTimer = null;
+(function buildPresetSelect() {
+  const groups = {};
+  for (const [id, p] of Object.entries(PRESETS)) (groups[p.group] = groups[p.group] || []).push(`<option value="${id}">${esc(p.label)}</option>`);
+  $('f-preset').innerHTML = Object.entries(groups).map(([g, o]) => `<optgroup label="${esc(g)}">${o.join('')}</optgroup>`).join('');
+})();
+function fieldHtml(f) {
+  const id = `fx-${f.k}`;
+  if (f.type === 'gap') return '<div class="field wide" style="height:0"></div>';
+  if (f.type === 'text') return `<label class="field${f.wide ? ' wide' : ''}"><span>${esc(f.label)}<em id="${id}-n"></em></span><input id="${id}" type="text" autocomplete="off" placeholder="${esc(f.ph)}"></label>`;
+  if (f.type === 'num') return `<label class="field"><span>${esc(f.label)}</span><input id="${id}" type="number" inputmode="numeric"${f.min != null ? ` min="${f.min}"` : ''}${f.max != null ? ` max="${f.max}"` : ''}></label>`;
+  if (f.type === 'sel') return `<label class="field"><span>${esc(f.label)}</span><select id="${id}">${f.opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}</select></label>`;
+  if (f.type === 'check') return `<label class="check" style="grid-column:1/-1"><input id="${id}" type="checkbox"> ${esc(f.label)}</label>`;
+  return '';
+}
+function renderFields(preset, msg) {
+  const p = PRESETS[preset] || PRESETS['single-static'];
+  $('f-note').textContent = p.note || ''; $('f-note').classList.toggle('hidden', !p.note);
+  $('f-fields').innerHTML = p.fields.map(fieldHtml).join('');
+  const src = {...(msg || {})};
+  if (preset === 'two-static') { const [a = '', b = ''] = String(src.text || '').split('||'); src._l1 = a; src._l2 = b; }
+  for (const f of p.fields) {
+    const el = $(`fx-${f.k}`); if (!el) continue;
+    const v = src[f.k] ?? f.def;
+    if (f.type === 'check') el.checked = !!v; else el.value = v ?? '';
+    if (f.type === 'sel' && el.selectedIndex < 0) el.value = f.def;
+  }
+  updateCounters(); fontHint();
+}
+function collect() {
+  const preset = $('f-preset').value, p = PRESETS[preset];
+  const out = edMode === 'edit' && edOrig ? {...edOrig} : {};
+  for (const f of p.fields) {
+    const el = $(`fx-${f.k}`); if (!el) continue;
+    if (f.type === 'check') out[f.k] = el.checked;
+    else if (f.type === 'num' || f.type === 'sel') { const n = parseInt(el.value, 10); out[f.k] = isNaN(n) ? f.def : n; }
+    else out[f.k] = el.value;
+  }
+  if (preset === 'two-static') { out.text = out._l1 + (out._l2 ? '||' + out._l2 : ''); delete out._l1; delete out._l2; }
+  Object.assign(out, p.fixed || {});
+  out.preset_id = preset;
+  if (preset !== 'custom') { out.pos_x = 0; out.width = 96; }
+  out.hidden = $('f-hidden').checked;
+  out.duration_sec = Math.max(1, parseInt($('f-duration').value, 10) || 10);
+  const fromTs = toTs($('f-from').value), toTs_ = toTs($('f-to').value);
+  out.schedule = {enabled: $('f-sched').checked && !!(fromTs || toTs_), from_ts: fromTs, to_ts: toTs_};
+  return out;
+}
+const pad = n => String(n).padStart(2, '0');
+const fromTs = ts => { if (!ts) return ''; const d = new Date(ts * 1000); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const toTs = s => s ? Math.floor(new Date(s).getTime() / 1000) : 0;
+
+function openEditor(mode, msg) {
+  edMode = mode; edOrig = msg ? JSON.parse(JSON.stringify(msg)) : null;
+  $('edit-title').textContent = mode === 'edit' ? 'Edit message' : mode === 'override' ? 'Show now' : 'New message';
+  $('edit-del').classList.toggle('hidden', mode !== 'edit');
+  $('edit-dup').classList.toggle('hidden', mode !== 'edit');
+  $('edit-save').textContent = mode === 'edit' ? 'Save' : 'Add to queue';
+  $('edit-save').className = 'btn ' + (mode === 'override' ? '' : 'primary');
+  $('edit-show').className = 'btn ' + (mode === 'override' ? 'primary' : '');
+  $('f-queue-opts').classList.toggle('hidden', mode === 'override');
+  const preset = msg?.preset_id && PRESETS[msg.preset_id] ? msg.preset_id : (msg?.preset_id ? 'custom' : 'single-static');
+  $('f-preset').value = preset;
+  renderFields(preset, msg);
+  $('f-duration').value = msg?.duration_sec || 10;
+  $('f-hidden').checked = !!msg?.hidden;
+  const s = msg?.schedule || {};
+  $('f-sched').checked = !!s.enabled; $('f-from').value = fromTs(s.from_ts); $('f-to').value = fromTs(s.to_ts);
+  schedToggle();
+  $('dlg-edit').showModal();
+  schedulePreview(0);
+  setTimeout(() => $('f-fields').querySelector('input[type=text]')?.focus(), 30);
+}
+function schedToggle() { const on = $('f-sched').checked; $('f-from').disabled = $('f-to').disabled = !on; }
+function updateCounters() {
+  $('f-fields').querySelectorAll('input[type=text]').forEach(el => {
+    const n = $(el.id + '-n'); if (!n) return;
+    const len = el.value.length;
+    n.textContent = len > MAX_TEXT - 40 ? `${len}/${MAX_TEXT}` : '';
+    n.className = len > MAX_TEXT ? 'over' : '';
   });
 }
-async function toggleHide(id) {
-  const d = await api('GET','/api/messages');
-  const m = d.messages.find(x => x.id === id);
-  if (!m) return;
-  m.hidden = !m.hidden;
-  await api('PUT', `/api/messages?id=${encodeURIComponent(id)}`, m);
-  loadMessages();
+function fontHint() {
+  const f = $('fx-font'), line = $('fx-line');
+  if (f && line) { const two = +f.value >= 3; line.disabled = two; if (two) line.value = 0; }
 }
-async function saveSettings() {
-  await api('PUT', '/api/settings', {
-    display_number: parseInt($('s-display-num').value)||29,
-    preset_gap_ms: parseInt($('s-gap').value)||100,
-    keepalive_sec: parseInt($('s-keepalive').value)||60,
+function schedulePreview(ms = 200) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    try { const d = await api('POST', '/api/preview', {message: collect()}); renderLed($('led-edit'), d.parts, 'Nothing to show (empty text?)'); }
+    catch (_) {}
+  }, ms);
+}
+$('f-preset').addEventListener('change', () => { renderFields($('f-preset').value, edOrig && edOrig.preset_id === $('f-preset').value ? edOrig : collectCarry()); schedulePreview(0); });
+function collectCarry() {  // keep the typed main text when switching type
+  const t = $('fx-text')?.value ?? $('fx-_l1')?.value;
+  return t ? {text: t} : {};
+}
+$('edit-form').addEventListener('input', e => { updateCounters(); if (e.target.id === 'fx-font') fontHint(); schedulePreview(); });
+$('edit-form').addEventListener('change', e => { if (e.target.id === 'f-sched') schedToggle(); if (e.target.id === 'fx-font') fontHint(); schedulePreview(); });
+$('edit-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const m = collect();
+  const r = edMode === 'edit'
+    ? await act(() => api('PUT', `/api/messages?id=${encodeURIComponent(edOrig.id)}`, m), 'Saved')
+    : await act(() => { delete m.id; return api('POST', '/api/messages', m); }, 'Added to queue');
+  if (r) { $('dlg-edit').close(); msgVersion = -1; }
+});
+$('edit-show').addEventListener('click', async () => {
+  const m = collect();
+  for (const k of ['id', 'schedule', 'hidden', 'duration_sec', 'persistent']) delete m[k];
+  const r = await act(() => api('POST', '/api/override', {active: true, message: m, expires_in: parseInt($('f-expiry').value, 10) || 0}), 'On display now');
+  if (r) $('dlg-edit').close();
+});
+$('edit-dup').addEventListener('click', async () => {
+  const m = collect(); delete m.id;
+  const r = await act(() => api('POST', '/api/messages', m), 'Duplicated');
+  if (r) $('dlg-edit').close();
+});
+$('edit-del').addEventListener('click', async () => { if (edOrig && await deleteMsg(edOrig)) $('dlg-edit').close(); });
+document.querySelectorAll('dialog [data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));
+
+// ---------- Toolbar ----------
+$('btn-add').onclick = () => openEditor('new');
+$('btn-override').onclick = () => openEditor('override');
+$('btn-play').onclick = () => act(() => api('PUT', '/api/settings', {queue_running: !status?.queue_running}));
+$('btn-next').onclick = () => act(() => api('POST', '/api/next'));
+$('btn-clear').onclick = () => act(() => api('POST', '/api/clear'));
+$('btn-test').onclick = () => act(() => api('POST', '/api/test'));
+$('q-random').onclick = () => act(() => api('PUT', '/api/settings', {random_mode: !status?.settings.random_mode}), status?.settings.random_mode ? 'Sequential order' : 'Random order');
+$('ov-stop').onclick = () => act(() => api('POST', '/api/cancel-override'), 'Override stopped');
+$('ov-save').onclick = () => act(async () => {
+  const ov = await api('GET', '/api/override');
+  if (!ov.message?.preset_id) throw new Error('No override message');
+  return api('POST', '/api/messages', {...ov.message, duration_sec: 10, pos_x: ov.message.pos_x ?? 0, width: ov.message.width ?? 96});
+}, 'Saved to queue');
+
+// ---------- Settings & time ----------
+$('btn-settings').onclick = () => {
+  const s = status?.settings || {};
+  $('s-display-num').value = s.display_number ?? 29;
+  $('s-gap').value = s.preset_gap_ms ?? 100;
+  $('s-keepalive').value = s.keepalive_sec ?? 60;
+  $('s-queue-running').checked = s.queue_running !== false;
+  $('s-random-mode').checked = !!s.random_mode;
+  $('h-rs485').textContent = status ? (status.display_connected ? `connected (${status.display_port})` : `simulation, ${status.display_port || 'no port'} not available`) : '—';
+  $('h-disp').textContent = !status?.display_connected ? '—'
+    : status.display_responding === true ? `${status.settings.display_number} answers${status.display_firmware ? `, firmware ${status.display_firmware}` : ''}`
+    : status.display_responding === false ? `${status.settings.display_number} doesn't answer status polls` : 'checking…';
+  $('h-dht').textContent = status?.sensor_port ? `${status.sensor_port}, ${status.dht22_ok ? `${status.dht22_temp}°C / ${status.dht22_hum}%` : 'no reading'}` : 'not configured';
+  fillTimeInfo();
+  $('dlg-settings').showModal();
+};
+function fillTimeInfo() {
+  if (!status) return;
+  const sl = serverLocal(serverNow());
+  $('t-server').textContent = sl.toISOString().slice(0, 19).replace('T', ' ');
+  const d = new Date();
+  $('t-local').textContent = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const off = status.utc_offset_min, sign = off >= 0 ? '+' : '-';
+  $('t-tz').textContent = `${status.tz || 'server default'} (UTC${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)})${status.time_synced ? ', synced' : ''}`;
+}
+$('settings-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const r = await act(() => api('PUT', '/api/settings', {
+    display_number: parseInt($('s-display-num').value, 10) || 29,
+    preset_gap_ms: parseInt($('s-gap').value, 10) || 100,
+    keepalive_sec: Math.max(0, parseInt($('s-keepalive').value, 10) || 0),
     queue_running: $('s-queue-running').checked,
     random_mode: $('s-random-mode').checked,
-  });
+  }), 'Settings saved');
+  if (r) $('dlg-settings').close();
+});
+function syncTime(quiet) {
+  let tz; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) {}
+  const body = {unix_seconds: Math.floor(Date.now() / 1000), tz_offset_min: -new Date().getTimezoneOffset()};
+  if (tz) body.tz = tz;
+  return act(() => api('POST', '/api/time', body), quiet ? null : 'Display clock synced');
 }
-async function testDisplay() {
-  await api('POST','/api/test');
-  loadStatus();
+$('btn-sync').onclick = () => syncTime(false);
+$('btn-scan').onclick = async () => {
+  const btn = $('btn-scan'), out = $('scan-result');
+  btn.disabled = true; out.textContent = 'Scanning…';
+  try {
+    const r = await fetch('/api/discover', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(x => x.json());
+    if (r.error) throw new Error(r.error);
+    out.innerHTML = r.found?.length
+      ? 'Found: ' + r.found.map(f => `<button type="button" class="btn sm" data-num="${f.number}" title="Use this display number">${f.number}${f.firmware ? ` · ${esc(f.firmware)}` : ''}</button>`).join(' ')
+      : esc(r.result);
+  } catch (e) { out.textContent = e.message; }
+  finally { btn.disabled = false; }
+};
+$('scan-result').addEventListener('click', e => { const b = e.target.closest('[data-num]'); if (b) { $('s-display-num').value = b.dataset.num; toast(`Display number set to ${b.dataset.num}, press Save`); } });
+function maybeAutoSync() {
+  // A Pi Zero without network time/RTC boots with a stale clock: fix it from the browser once.
+  if (autoSynced || !status || status.time_synced) return;
+  autoSynced = true;
+  const skew = Math.abs(status.server_time - Date.now() / 1000);
+  const tzDiff = status.utc_offset_min !== -new Date().getTimezoneOffset();
+  if (skew > 60 || tzDiff) syncTime(true).then(() => toast(`Display clock was ${skew > 60 ? 'off by ' + fmtDur(skew) : 'in another time zone'}, synced from this device`));
 }
-function toggleSettings() {
-  $('settings-panel').classList.toggle('hidden');
-}
-function init() {
-  loadStatus(); loadSettings(); loadMessages();
-  setInterval(loadStatus, 3000);
-}
-init();
+
+// ---------- Boot ----------
+setupLed($('led-now')); setupLed($('led-edit'));
+poll();
+setInterval(() => { if (!document.hidden) poll(); }, 2000);
+setInterval(tickUi, 250);
+setInterval(() => { if (!dragging && messages.length) renderQueue(); }, 60000);  // refresh schedule chips
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 </script>
 </body>
 </html>

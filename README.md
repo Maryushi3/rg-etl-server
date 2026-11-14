@@ -1,6 +1,6 @@
 # RG Display Server
 
-HTTP server for controlling R&G LED displays over RS485. Features a web UI for queue management, override, presets, scheduling, namedays, and DHT22 sensor display.
+HTTP server for controlling R&G LED displays over RS485. Features a web UI with a live preview of what's on the display, queue management (drag to reorder, works on phones), override, presets, scheduling, namedays, and DHT22 sensor display. The web UI is self-contained (no CDN), so it works on an offline Pi.
 
 ## Quick Start
 
@@ -19,8 +19,8 @@ Open http://localhost:8080 in a browser.
 
 ## Requirements
 
-- Python 3
-- `pyserial` (`pip install pyserial`)
+- Python 3.7+ (no other dependencies for simulation mode)
+- `pyserial` (`pip install pyserial`) to talk to the display / Arduino
 - On Raspberry Pi with MAX485: `RPi.GPIO` (`pip install RPi.GPIO`)
 
 ## Raspberry Pi Setup
@@ -48,13 +48,16 @@ python3 server.py [--port PORT] [--serial DEVICE] [--arduino-serial DEVICE]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8080` | HTTP server port |
-| `--serial` | `/dev/ttyAMA0` | RS485 display serial device. Runs in simulation mode if not found. |
+| `--bind` | `0.0.0.0` | Address to listen on (`127.0.0.1` = this machine only) |
+| `--serial` | `/dev/ttyAMA0` | RS485 display serial device. Runs in simulation mode if not found, and connects automatically when the device appears (e.g. USB adapter plugged in later or re-plugged). |
 | `--arduino-serial` | *(none)* | Serial port for DHT22 temperature/humidity sensor |
 | `--rs485-gpio` | *(none)* | BCM GPIO pin tied to MAX485 RE+DE for direction control |
 
 ## start.sh
 
-The `start.sh` script auto-detects USB serial devices and interactively prompts you to assign each one (RS485 display or DHT22 Arduino). Supports macOS and Linux. Override detection with `--serial` or `--arduino-serial`. Set `PORT` environment variable to change the HTTP port.
+The `start.sh` script auto-detects USB serial devices and interactively prompts you to assign each one (RS485 display or DHT22 Arduino). Supports macOS and Linux. Override detection with `--serial` or `--arduino-serial`. Change the HTTP port with `--port N` or the `PORT` environment variable.
+
+When run without a terminal (e.g. from systemd) it never prompts; pass the devices explicitly there.
 
 ## Files
 
@@ -66,6 +69,8 @@ The `start.sh` script auto-detects USB serial devices and interactively prompts 
 | `messages.json` | Persisted message queue (gitignored) |
 | `settings.json` | Persisted settings (gitignored) |
 
+Both files are written atomically (temp file + rename), so a power cut during a save can't truncate them. If a file can't be parsed at startup it is renamed to `<name>.corrupt-<timestamp>` and kept, rather than being silently overwritten. Unknown fields in either file are preserved.
+
 ## Presets
 
 Each message has a `preset_id` that determines how it renders on the display:
@@ -73,6 +78,7 @@ Each message has a `preset_id` that determines how it renders on the display:
 | Preset | Description |
 |--------|-------------|
 | `single-static` | Single line of static text |
+| `custom` | Raw single command: text, font, line, alignment, `pos_x`, `width` (right edge), scroll |
 | `scrolling` | Single line of scrolling text |
 | `two-static` | Two static lines (separated by `\|\|` in text) |
 | `top-bottom-scroll` | Top static line, bottom scrolling line |
@@ -86,17 +92,32 @@ Each message has a `preset_id` that determines how it renders on the display:
 | `do-konca-roku-scroll` | Single scrolling line with count |
 | `dht22` | Temperature and humidity from DHT22 sensor |
 
+## Protocol notes
+
+Frames are `02 | address | length | payload | checksum | 03`, all as ASCII hex characters (see [communication.md](https://github.com/HiszpanInk/rg-screens-things/blob/main/communication.md)). Things confirmed from the original controller's traffic dumps in that repo:
+
+- **Address** = `(display_number << 2) | 3` as two hex chars, left-padded ([issue #1](https://github.com/HiszpanInk/rg-screens-things/issues/1)). The controller addresses 16, 17, 26-29, 40 and 48 this way, so numbers above 31 exist. Address 0 (`03`) is the controller itself; displays reply there.
+- **Length** = number of payload bytes. The payload starts with a command: `80` = set text (followed by line, alignment, byte 9, font, x, right edge, scroll, then the text), `00` = status poll.
+- Displays **answer**: `80` after each text frame, and `00` + firmware (e.g. `00TLA-2.0a`) to a poll. The server uses this for "Find displays" and to show whether the display actually answers (the header pill says "No reply" if the port is open but the display stays silent).
+- The controller never sends a separate clear; it overwrites text windows and periodically resends unchanged static text.
+- The display font has a degree sign at byte `0xFF`; typing `°` sends that.
+- Byte 9 is `7` here (and `1` in the clear frames, as in the reference script), while the original controller always sends `8`. Its meaning is unknown.
+
+Fonts: 1 small, 2 bold, 3 bold two-line, 4 thin two-line digits, 5 tall two-line digits, 6 bold tall two-line, 7 full height. Text is converted to the display's cp852 charset; typographic quotes, dashes and `…` are replaced with plain look-alikes and anything else unsupported becomes `?`. Text is capped at 243 characters (protocol limit).
+
 ## Queue
 
 Messages cycle in order with a configurable duration (`duration_sec`, default 10s). Supports:
-- **Random mode**: picks a random visible message instead of sequential
-- **Scheduling**: per-message time windows (from/to)
+- **Random mode**: picks a random visible message instead of sequential (never the same one twice in a row)
+- **Scheduling**: per-message time windows (from/to); messages outside their window are skipped
 - **Persistence**: saved to `messages.json` on every mutation
-- **Hidden messages**: skipped during normal rotation
+- **Hidden messages**: skipped during normal rotation (still playable with "Show now" / skip)
+- **Live updates**: editing the message that is on screen repaints it immediately; deleting or hiding it moves on. Dynamic presets (clock, name days, DHT22, days to year end) refresh while shown.
+- When nothing is visible (all hidden / outside schedule) the display is blanked.
 
 ## Override
 
-A temporary message that replaces the queue. Supports an expiry timestamp. Clock and nameday overrides refresh every ~1 second. The "Save to Messages" button copies the current override into the queue.
+A temporary message that replaces the queue ("Show now…" in the web UI). Supports an expiry. Dynamic presets refresh while shown. "Save to queue" copies the current override into the queue.
 
 ## Settings
 
@@ -104,11 +125,17 @@ Settings are saved to `settings.json`:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `display_number` | `29` | RS485 display address |
+| `display_number` | `29` | RS485 display address, as set by the DIP switches (frame address = n×4+3, so 29 → `37 37`) |
 | `preset_gap_ms` | `100` | Gap between multi-frame presets (min ~50ms) |
-| `keepalive_sec` | `60` | Keepalive interval |
+| `keepalive_sec` | `60` | Repaint static content this often (0 = off). Never fires while something scrolls, so animations aren't restarted |
 | `queue_running` | `true` | Whether the queue loop is active |
 | `random_mode` | `false` | Random message selection |
+
+The old `persistent` message flag never had an effect (every message is saved) and is no longer shown in the UI; it's left untouched in existing files.
+
+## Time
+
+The clock, name-day and schedule logic use the server's clock. A Pi without network time or an RTC boots with a stale clock, so the web UI syncs the time (and time zone) from the browser automatically when they're off by more than a minute or the zone differs. Manual sync is in Settings. The sync lasts until the server restarts.
 
 ## Credits
 

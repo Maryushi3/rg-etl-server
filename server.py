@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 """
-RG Display Server — local RS485 controller for R&G LED displays.
-Run: python server.py [--port 8080] [--serial /dev/...]
+RG Display Server: local RS485 controller for R&G LED displays.
+Run: python3 server.py [--port 8080] [--serial /dev/...] [--arduino-serial /dev/...] [--rs485-gpio N]
+
+Compatible with Python 3.7+ (Raspberry Pi OS Buster and newer).
 """
-import argparse, json, math, os, re, serial, threading, time
-from datetime import datetime
+import argparse, json, os, random, signal, threading, time, traceback, unicodedata, uuid
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+from urllib.parse import urlparse, parse_qs
+
+try:
+    import serial  # pyserial
+except ImportError:  # still usable in simulation mode
+    serial = None
 try:
     import RPi.GPIO as GPIO
 except (ImportError, RuntimeError):
     GPIO = None
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-from functools import partial
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    ZoneInfo = None
 
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "messages.json")
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(HERE, "messages.json")
+SETTINGS_FILE = os.path.join(HERE, "settings.json")
+HTML_FILE = os.path.join(HERE, "webui.html")
 
 # ---- Clock Data (mirrors clock.hpp) ----
 MONTH_PL = ["sty","lut","mar","kwi","maj","cze","lip","sie","wrz","paź","lis","gru"]
@@ -188,9 +202,9 @@ NAMEDAYS = [
     "Alina,Aneta,Benon,Aubert,Aureusz",
     "Adolf,Adolfa,Adolfina,Adrianna,Awit",
     "Efrem,Elżbieta,Gerwazy,Amand,Amanda",
-    "Borzysław, Gerwazy, Julianna, Eurydyka, Grymilda oraz Michalina, Odo, Protazy, Abraham, Adam, Adrian, Agata, Agnieszka, Alan, Albert, Albin, Aldona, Aleksander, Aleksandra, Alfred, Amadeusz, Amelia, Anastazja, Andrzej",
-    "Bogna, Bogumiła, Bożena, Bratomir, Edburga oraz Florentyna, Franciszek, Gemma, Hektor, Jaktor, Michał, Rafał, Abraham, Adam, Adrian, Agata, Agnieszka, Alan, Albert, Albin, Aldona, Aleksander, Aleksandra, Alfred",
-    "Albaniusz, Alicja, Alojza, Alojzy, Chloe oraz Demetria, Domamir, Lutfryd, Rudolf, Rudolfa, Rudolfina, Teodor, Abraham, Adam, Adrian, Agata, Agnieszka, Alan, Albert, Albin, Aldona, Aleksander, Aleksandra, Alfred",
+    "Borzysław,Gerwazy,Julianna,Eurydyka,Grymilda",
+    "Bogna,Bogumiła,Bożena,Bratomir,Edburga",
+    "Albaniusz,Alicja,Alojza,Alojzy,Chloe",
     "Achacjusz,Achacy,Agenor,Alban,Flawiusz",
     "Agrypina,Albin,Bazyli,Anna,Hanna",
     "Dan,Danisz,Danuta,Emilia,Jan",
@@ -386,162 +400,363 @@ NAMEDAYS = [
     "Korneliusz,Mariusz,Melania,Donata,Saturnina",
     "",
 ]
+
 DAYS_IN_MONTH = [0,31,28,31,30,31,30,31,31,30,31,30,31]
 
 def nameday_index(month, day):
+    if month == 2 and day == 29:  # table has no Feb 29; reuse Feb 28
+        day = 28
     idx = sum(DAYS_IN_MONTH[m] for m in range(1, month)) + day - 1
-    total = sum(DAYS_IN_MONTH)
-    return min(idx, total - 1)
+    return min(idx, sum(DAYS_IN_MONTH) - 1)
+
+def _nameday_all(now):
+    idx = nameday_index(now.month, now.day)
+    if 0 <= idx < len(NAMEDAYS):
+        return [n.strip() for n in NAMEDAYS[idx].split(",") if n.strip()]
+    return []
 
 def short_date(now):
     return f"{now.day} {MONTH_PL[now.month-1]} {now.year}"
 
-def _nameday_list(now):
-    idx = nameday_index(now.month, now.day)
-    if 0 <= idx < len(NAMEDAYS):
-        names = NAMEDAYS[idx].split(",")
-        return names[:5]
-    return []
-
 def nameday_text(now):
-    names = _nameday_list(now)
-    if names:
-        return f"Imieniny: {', '.join(names)}"
-    return ""
+    names = _nameday_all(now)[:5]
+    return f"Imieniny: {', '.join(names)}" if names else ""
 
 def nameday_names_only(now):
-    idx = nameday_index(now.month, now.day)
-    if 0 <= idx < len(NAMEDAYS):
-        return re.sub(r",(?!\s)", ", ", NAMEDAYS[idx])
-    return ""
+    return ", ".join(_nameday_all(now))
 
 def nameday_short(now, max_chars=18):
-    names = _nameday_list(now)
     result = ""
-    for name in names:
+    for name in _nameday_all(now)[:5]:
         candidate = name if not result else result + ", " + name
-        if len(candidate) <= max_chars:
-            result = candidate
-        else:
+        if len(candidate) > max_chars:
             break
+        result = candidate
     return result
 
 def days_until_end_of_year(now):
-    end = datetime(now.year + 1, 1, 1)
-    return (end - now).days
+    return (datetime(now.year + 1, 1, 1) - now).days
 
 DAYS_PL = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"]
 
 def weekday_pl(now):
     return DAYS_PL[now.weekday()].lower()
 
-# ---- RS485 Driver ----
-ADDR = "37 37"  # display 29
+# ---- Helpers ----
+def _int(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return default
 
-def hex_byte(v):
-    return format(v, '02X')
+def _clamp(v, lo, hi, default):
+    return max(lo, min(hi, _int(v, default)))
 
-def hex_char(nib):
-    nib &= 0xF
-    v = 0x30 + nib if nib < 10 else 0x37 + nib
-    return f"{v:02X}"
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-def make_message(text, font=3, line=0, alignment=1, x=0, w=96, scroll=0):
-    """Build full hex frame string for one display command."""
-    tx = " ".join(c.encode("cp852").hex() for c in text)
-    text_count = len(text)
-    data_len = text_count + 12
-    lh = hex(data_len)[2:].upper().zfill(2)
-    length = lh[0].encode("cp852").hex() + " " + lh[1].encode("cp852").hex()
-    fb = hex_char(font - 1)
-    lb = hex_char(1 if line else 0)
-    ab = hex_char(0 if alignment == 0 else (1 if alignment == 1 else 2))
-    xh = hex_char(x // 16)
-    xl = hex_char(x % 16)
-    wh = hex_char(w // 16)
-    wl = hex_char(w % 16)
-    sh = hex_char(scroll // 16)
-    sl = hex_char(scroll % 16)
-    ctrl = f"38 30 {lb} {ab} 37 {fb} {xh} {xl} {wh} {wl} {sh} {sl}"
-    content = f"{ADDR} {length} {ctrl} {tx}"
-    ck = sum(int(v, 16) for v in content.split()) % 256
-    ck_s = hex(ck)[2:].upper().zfill(2)
-    ck_hex = ck_s[0].encode("cp852").hex() + " " + ck_s[1].encode("cp852").hex()
-    return f"02 {content} {ck_hex} 03"
+# ---- RS485 frame building ----
+FRAME_MAX_TEXT = 0xFF - 12  # length byte = chars + 12, must fit in 2 hex digits
+_HEX = "0123456789ABCDEF"
 
-def send_raw(ser, frame):
-    """Send a hex frame string over RS485. Toggles MAX485 direction GPIO if configured."""
-    if not ser:
-        return f"SIM: {frame[:60]}... ({len(frame)} chars)"
-    data = bytes.fromhex(frame)
-    gpio_pin = getattr(state, 'rs485_gpio', None)
-    if gpio_pin is not None:
-        GPIO.output(gpio_pin, True)
-    ser.write(data)
-    ser.flush()
-    if gpio_pin is not None:
-        GPIO.output(gpio_pin, False)
-    return f"TX: {frame[:60]}..."
+# Characters people type that cp852 lacks; mapped to look-alikes instead of failing.
+_TRANSLATE = str.maketrans({
+    "\u2013": "-", "\u2014": "-", "\u2212": "-", "\u2010": "-", "\u2011": "-",
+    "\u201e": '"', "\u201d": '"', "\u201c": '"', "\u201f": '"', "\u2033": '"',
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u2032": "'", "\u00b4": "'",
+    "\u2026": "...", "\u00a0": " ", "\u2009": " ", "\u202f": " ",
+    "\u20ac": "EUR", "\u2022": "*", "\u00b7": "*",
+    # The display font has the degree sign at 0xFF (cp852: NBSP), seen in the original
+    # controller's "-- \xffC" temperature field. NBSP typed by users becomes a plain space.
+    "\u00b0": "\u00a0",
+})
 
-def clear_screen(ser, addr="37 37"):
-    """Blank both lines using reference protocol (byte9=0x31, font=3)."""
-    spaces = "                  "  # 18 spaces
-    tx = " ".join(c.encode("cp852").hex() for c in spaces)
-    for li in [0, 1]:
-        lb = "31" if li else "30"
-        data_len = len(spaces) + 12
-        lh = hex(data_len)[2:4].upper().zfill(2)
-        length = lh[0].encode("cp852").hex() + " " + lh[1].encode("cp852").hex()
-        ctrl = f"38 30 {lb} 30 31 32 30 30 36 30 30 30"
-        content = f"{addr} {length} {ctrl} {tx}"
-        ck = sum(int(v, 16) for v in content.split()) % 256
-        ck_s = hex(ck)[2:].upper().zfill(2)
-        ck_hex = ck_s[0].encode("cp852").hex() + " " + ck_s[1].encode("cp852").hex()
-        frame = f"02 {content} {ck_hex} 03"
-        send_raw(ser, frame)
-        time.sleep(0.05)
+def _cp852_ok(ch):
+    try:
+        ch.encode("cp852")
+        return True
+    except UnicodeEncodeError:
+        return False
 
-send_blank = clear_screen
+def sanitize_text(text):
+    """Make text safe for the display: cp852-encodable, no control bytes, length-capped."""
+    out = []
+    for ch in str(text).translate(_TRANSLATE):
+        if ord(ch) < 32 or ord(ch) == 127:
+            out.append(" ")
+        elif _cp852_ok(ch):
+            out.append(ch)
+        else:
+            base = unicodedata.normalize("NFKD", ch)[:1]
+            out.append(base if base and ord(base) >= 32 and _cp852_ok(base) else "?")
+    return "".join(out)[:FRAME_MAX_TEXT]
 
-# ---- Preset expanders ----
-def expand_preset(msg):
+def _nib(v):
+    return ord(_HEX[int(v) & 0xF])
+
+def _hex2(v):
+    v = int(v) & 0xFF
+    return [_nib(v >> 4), _nib(v)]
+
+def address_bytes(display_number):
     """
-    Expand a MessageSlot dict into a list of (text, font, line, align, x, w, scroll) tuples.
-    This controls what the display actually shows.
+    Address as two ASCII hex chars of (n << 2) | 3, left-padded: 29 -> '77', 20 -> '53', 1 -> '07'.
+    Source: rg-screens-things issue #1, confirmed by the original controller's dumps
+    (it addresses displays 16, 17, 26-29, 40 and 48 this way). Address 0 ('03') is the controller.
+    """
+    return _hex2(_clamp(display_number, 0, 63, 29) * 4 + 3)
+
+# Frame: 02 | addr(2) | length(2) = payload byte count | payload | checksum(2) | 03
+# Payload starts with a 2-char command:
+#   "80" set text (+10 control chars + text); the display answers "80" (ACK) to address 0
+#   "00" status poll; the display answers "00" + firmware, e.g. "00TLA-2.0a"
+CMD_TEXT = (0x38, 0x30)
+CMD_POLL = (0x30, 0x30)
+CONTROLLER_ADDR = None  # set below (address_bytes needs _hex2)
+
+def build_frame(addr, payload):
+    content = list(addr) + _hex2(len(payload)) + list(payload)
+    frame = [0x02] + content + _hex2(sum(content) % 256) + [0x03]
+    return " ".join("%02X" % b for b in frame)
+
+def parse_frames(buf):
+    """Yield (addr_value, payload_bytes) for valid frames in a byte buffer."""
+    i = 0
+    while True:
+        s = buf.find(b"\x02", i)
+        if s < 0:
+            return
+        e = buf.find(b"\x03", s + 1)
+        if e < 0:
+            return
+        s = buf.rfind(b"\x02", s, e)  # resync past a truncated/garbled frame
+        body, i = buf[s + 1:e], e + 1
+        try:
+            if len(body) < 6 or int(body[2:4].decode(), 16) != len(body) - 6:
+                continue
+            if int(body[-2:].decode(), 16) != sum(body[:-2]) % 256:
+                continue
+            yield int(body[:2].decode(), 16), bytes(body[4:-2])
+        except (ValueError, UnicodeDecodeError):
+            continue
+
+def make_message(text, font=3, line=0, alignment=1, x=0, w=96, scroll=0, addr=None, sep=0x37):
+    """Build one set-text command as a hex string ("02 .. 03")."""
+    if addr is None:
+        addr = address_bytes(state.settings.get("display_number", 29))
+    data = list(sanitize_text(text).encode("cp852"))
+    align = 0 if alignment == 0 else (1 if alignment == 1 else 2)
+    # sep (byte 9): 0x37 here, 0x31 in the reference clear; the original controller sends 0x38.
+    # Meaning unknown, kept as-is because it is proven to work.
+    ctrl = [*CMD_TEXT, _nib(1 if line else 0), _nib(align), sep,
+            _nib(_int(font, 1) - 1),
+            *_hex2(_clamp(x, 0, 255, 0)), *_hex2(_clamp(w, 0, 255, 96)),
+            *_hex2(_clamp(scroll, 0, 255, 0))]
+    return build_frame(addr, ctrl + data)
+
+CONTROLLER_ADDR = address_bytes(0)
+
+def clear_frames(addr=None):
+    """Blank both lines using reference protocol (byte9=0x31, font=3, 18 spaces)."""
+    return [make_message(" " * 18, 3, li, 0, 0, 96, 0, addr=addr, sep=0x31) for li in (0, 1)]
+
+# ---- Display (RS485 port + optional MAX485 direction pin) ----
+class Display:
+    RETRY_SEC = 10
+
+    def __init__(self, path=None, gpio_pin=None):
+        self.path = path
+        self.gpio_pin = gpio_pin
+        self.ser = None
+        self.lock = threading.RLock()
+        self._next_retry = 0.0
+        self.tx_count = 0
+        self.last_tx = 0.0
+        self.responding = None   # True/False after a status poll, None = not checked yet
+        self.firmware = None
+        self.checked_at = 0.0
+        self._next_check = time.monotonic() + 3
+        self.scan_lock = threading.Lock()
+
+    @property
+    def connected(self):
+        return self.ser is not None
+
+    def open(self, announce=True):
+        if serial is None:
+            if announce:
+                log("pyserial not installed: SIMULATION MODE (pip install pyserial)")
+            return False
+        try:
+            s = serial.Serial(self.path, 9600, timeout=2, write_timeout=5)
+            s.rts = False
+            time.sleep(0.3)
+            self.ser = s
+            log(f"RS485 on {self.path}")
+            return True
+        except Exception as e:
+            if announce:
+                log(f"No serial ({e}): SIMULATION MODE, will retry if {self.path} appears")
+            return False
+
+    def maybe_reconnect(self):
+        if self.ser is not None or not self.path or serial is None:
+            return
+        now = time.monotonic()
+        if now < self._next_retry:
+            return
+        self._next_retry = now + self.RETRY_SEC
+        if os.path.exists(self.path):
+            with self.lock:
+                self.open(announce=False)
+
+    def close(self):
+        with self.lock:
+            if self.ser is not None:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+            self.ser = None
+
+    def write(self, frame):
+        """Send one hex frame string. Never raises; drops to simulation on error."""
+        with self.lock:
+            if self.ser is None:
+                return f"SIM: {frame[:60]}... ({len(frame)} chars)"
+            data = bytes.fromhex(frame)
+            try:
+                if self.gpio_pin is not None:
+                    GPIO.output(self.gpio_pin, True)
+                self.ser.write(data)
+                self.ser.flush()
+                if self.gpio_pin is not None:
+                    time.sleep(0.002)  # let the last byte leave the shift register
+                self.tx_count += 1
+                self.last_tx = time.monotonic()
+                return f"TX: {frame[:60]}..."
+            except Exception as e:
+                log(f"RS485 write failed ({e}); reconnecting in background")
+                self.close()
+                self._next_retry = time.monotonic() + 2
+                return f"ERR: {e}"
+            finally:
+                if self.gpio_pin is not None:
+                    try:
+                        GPIO.output(self.gpio_pin, False)
+                    except Exception:
+                        pass
+
+    def query(self, number, payload=CMD_POLL, timeout=0.35):
+        """Send a command to display `number` and return its reply payload (str) or None."""
+        with self.lock:
+            if self.ser is None:
+                return None
+            wait = self.last_tx + 0.05 - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)  # let the display finish ACKing our last frame (half duplex)
+            try:
+                self.ser.reset_input_buffer()  # drop ACKs of earlier text frames
+            except Exception:
+                pass
+            if not self.write(build_frame(address_bytes(number), payload)).startswith("TX"):
+                return None
+            ser, old_timeout, buf = self.ser, self.ser.timeout, b""
+            deadline = time.monotonic() + timeout
+            try:
+                ser.timeout = 0.03
+                while time.monotonic() < deadline:
+                    buf += ser.read(max(1, ser.in_waiting))
+                    for a, data in parse_frames(buf):
+                        if a == 3:  # replies go to the controller (address 0)
+                            return data.decode("cp852", errors="replace")
+            except Exception as e:
+                log(f"RS485 read failed ({e})")
+                return None
+            finally:
+                try:
+                    ser.timeout = old_timeout
+                except Exception:
+                    pass
+            return None
+
+    def check_presence(self, number, every=30):
+        """Poll the configured display now and then; tells "port open" from "display answers"."""
+        if self.ser is None or time.monotonic() < self._next_check:
+            return
+        self._next_check = time.monotonic() + every
+        reply = self.query(number)
+        was = self.responding
+        self.responding = bool(reply and reply.startswith("00"))
+        self.checked_at = time.time()
+        if self.responding:
+            self.firmware = reply[2:] or None
+        if was is not self.responding:
+            log(f"Display {number}: " + (f"answers (firmware {self.firmware})" if self.responding
+                                          else "no reply to status poll (no power/wiring, wrong number, or adapter can't receive)"))
+
+    def scan(self, numbers, timeout=0.25):
+        found = []
+        for n in numbers:
+            reply = self.query(n, timeout=timeout)
+            if reply is not None:
+                found.append({"number": n, "reply": reply,
+                              "firmware": reply[2:] if reply.startswith("00") else None})
+        return found
+
+    def send(self, frames, gap_ms=100, blank=False):
+        """Send a full update as one bus transaction (optional blank first)."""
+        logs = []
+        with self.lock:
+            if blank:
+                for f in clear_frames():
+                    self.write(f)
+                    time.sleep(0.05)
+                time.sleep(0.05)
+            for f in frames:
+                logs.append(self.write(f))
+                if len(frames) > 1:
+                    time.sleep(gap_ms / 1000.0)
+        return "; ".join(logs)
+
+# ---- Presets ----
+PART_KEYS = ("text", "font", "line", "align", "x", "w", "scroll")
+
+def expand_preset(msg, now):
+    """
+    Expand a message dict into a list of (text, font, line, align, x, w, scroll) tuples.
+    Text may contain __placeholders__ that fill_dynamic() resolves.
     """
     preset = msg.get("preset_id", "custom")
+    g = msg.get
+    gi = lambda k, d: _int(g(k, d), d)
+    gs = lambda k: str(g(k) or "")
     parts = []
 
     if preset == "scrolling":
-        return [(msg.get("text", ""), msg.get("font", 1), msg.get("line", 0),
-                 msg.get("alignment", 1), msg.get("pos_x", 0),
-                 msg.get("width", 96), msg.get("scroll", 99))]
+        return [(gs("text"), gi("font", 1), gi("line", 0), gi("alignment", 1),
+                 gi("pos_x", 0), gi("width", 96), gi("scroll", 99))]
 
-    elif preset == "single-static":
-        return [(msg.get("text", ""), msg.get("font", 1), msg.get("line", 0),
-                 msg.get("alignment", 0), msg.get("pos_x", 0),
-                 msg.get("width", 96), 0)]
+    if preset == "single-static":
+        return [(gs("text"), gi("font", 1), gi("line", 0), gi("alignment", 0),
+                 gi("pos_x", 0), gi("width", 96), 0)]
 
-    elif preset == "two-static":
-        lines = msg.get("text", "").split("||")
-        f1 = msg.get("font", 1)
-        a1 = msg.get("alignment", 0)
-        f2 = msg.get("_ts_font2", 1)
-        a2 = msg.get("_ts_align2", 0)
+    if preset == "two-static":
+        lines = gs("text").split("||")
         if len(lines) >= 1 and lines[0].strip():
-            parts.append((lines[0].strip(), f1, 0, a1, 0, 96, 0))
+            parts.append((lines[0].strip(), gi("font", 1), 0, gi("alignment", 0), 0, 96, 0))
         if len(lines) >= 2 and lines[1].strip():
-            parts.append((lines[1].strip(), f2, 1, a2, 0, 96, 0))
+            parts.append((lines[1].strip(), gi("_ts_font2", 1), 1, gi("_ts_align2", 0), 0, 96, 0))
         return parts
 
-    elif preset == "bus":
-        # Route (font 3, left) + dest (font 1, same line) + scrolling (L1)
-        # Bytes 11-12 (dest X) shift right based on route pixel width + manual shift.
+    if preset == "bus":
+        # Route (font 3, left) + dest (font 1, same line) + scrolling (L1).
         # Digit widths: '1'=4px, others=6px, 1px gap between chars.
-        route = msg.get("text", "")
-        dest = msg.get("name", "")
-        scroll_txt = msg.get("_scroll", "")
-        shift = msg.get("_bus_shift", 0)
+        route, dest, scroll_txt = gs("text"), gs("name"), gs("_scroll")
+        shift = gi("_bus_shift", 0)
         if route:
             w = sum(4 if c == '1' else 6 for c in route) + max(0, len(route) - 1)
             dest_x = max(6, min(60, 2 + w + 2 + shift))
@@ -551,30 +766,21 @@ def expand_preset(msg):
         if dest:
             parts.append((dest, 1, 0, 0, dest_x, 96, 0))
         if scroll_txt:
-            sc = msg.get("scroll", 99)
-            parts.append((scroll_txt, 1, 1, 2, dest_x, 96, sc))
+            parts.append((scroll_txt, 1, 1, 2, dest_x, 96, gi("scroll", 99)))
         return parts
 
-    elif preset == "train":
-        # From-station (L0 left) + to-station (L1 right) + number (L0 right, font 5)
-        # Display is 88px wide. Number right-aligned with 4px right margin.
-        # Digit sizes: all 4px, 1px gap between chars. nw = len*5 - 1.
-        from_st = msg.get("text", "")
-        to_st = msg.get("_train_to", "")
-        number = msg.get("name", "")
-        f_from = msg.get("_train_font_from", 1)
-        f_to = msg.get("_train_font_to", 1)
-        a_from = msg.get("_train_align_from", 0)
-        a_to = msg.get("_train_align_to", 2)
-        shift = msg.get("_train_shift", 0)
+    if preset == "train":
+        # From (L0) + to (L1) + number (L0 right, font 5). Number: 4px/digit + 1px gaps.
+        from_st, to_st, number = gs("text"), gs("_train_to"), gs("name")
+        f_from, f_to = gi("_train_font_from", 1), gi("_train_font_to", 1)
+        a_from, a_to = gi("_train_align_from", 0), gi("_train_align_to", 2)
         if number:
-            nw = len(number) * 5 - 1  # 4px/digit + 1px gaps
-            num_x = max(20, min(80, 84 - nw + shift))
-            st_right = num_x
+            nw = len(number) * 5 - 1
+            num_x = max(20, min(80, 84 - nw + gi("_train_shift", 0)))
             if from_st:
-                parts.append((from_st, f_from, 0, a_from, 2, st_right, 0))
+                parts.append((from_st, f_from, 0, a_from, 2, num_x, 0))
             if to_st:
-                parts.append((to_st, f_to, 1, a_to, 0, st_right, 0))
+                parts.append((to_st, f_to, 1, a_to, 0, num_x, 0))
             parts.append((number, 5, 0, 0, num_x, 96, 0))
         else:
             if from_st:
@@ -583,93 +789,68 @@ def expand_preset(msg):
                 parts.append((to_st, f_to, 1, a_to, 0, 96, 0))
         return parts
 
-    elif preset == "top-bottom-scroll":
-        top = msg.get("text", "")
-        bottom = msg.get("_tbs_bottom", "")
-        ft = msg.get("_tbs_font_top", 1)
-        fb = msg.get("_tbs_font_bottom", 1)
-        sc = msg.get("_tbs_scroll", 99)
+    if preset == "top-bottom-scroll":
+        top, bottom = gs("text"), gs("_tbs_bottom")
         if top:
-            parts.append((top, ft, 0, 1, 0, 96, 0))
+            parts.append((top, gi("_tbs_font_top", 1), 0, 1, 0, 96, 0))
         if bottom:
-            parts.append((bottom, fb, 1, 1, 0, 96, sc))
+            parts.append((bottom, gi("_tbs_font_bottom", 1), 1, 1, 0, 96, gi("_tbs_scroll", 99)))
         return parts
 
-    elif preset == "clock":
-        # Time (font 3, line 0, left) + date (font 1, line 0, right) + weekday (font 1, line 1, under date)
-        now = datetime.now()
+    if preset == "clock":
+        # Time (font 3, left) + date (font 1, right) + weekday (font 1, line 1, under date)
         time_str = now.strftime("%H:%M")
         time_width = sum(4 if c == '1' else (2 if c == ':' else 6) for c in time_str) + len(time_str) - 1
-        shift = msg.get("_clock_shift", 0)
-        time_right = max(6, min(60, 2 + time_width + 2 + shift))
+        time_right = max(6, min(60, 2 + time_width + 2 + gi("_clock_shift", 0)))
         parts.append(("__clock_time__", 3, 0, 0, 2, time_right, 0))
         date_x = time_right + 4
         parts.append(("__clock_date__", 1, 0, 0, date_x, 96, 0))
-        date_text = short_date(now)
-        weekday_text = weekday_pl(now)
         f1_pw = lambda t: 4 * len(t)
-        weekday_x = date_x + max(0, (f1_pw(date_text) - f1_pw(weekday_text)) // 2)
+        weekday_x = date_x + max(0, (f1_pw(short_date(now)) - f1_pw(weekday_pl(now))) // 2)
         parts.append(("__clock_weekday__", 1, 1, 0, weekday_x, 96, 0))
         return parts
 
-    elif preset == "imieniny":
-        sc = int(msg.get("_imieniny_scroll", 99))
+    if preset == "imieniny":
         parts.append(("IMIENINY", 2, 0, 1, 0, 96, 0))
-        parts.append(("__imieniny_names__", 1, 1, 1, 0, 96, sc))
+        parts.append(("__imieniny_names__", 1, 1, 1, 0, 96, gi("_imieniny_scroll", 99)))
         return parts
 
-    elif preset == "dht22":
-        temp = state.dht22_temp_str
-        hum = state.dht22_hum_str
-        ok = state.dht22_ok
-        parts.append((f"Temp: {temp} st.", 1, 0, 1, 0, 96, 0))
-        if ok:
-            parts.append((f"Wilg: {hum} pct.", 1, 1, 1, 0, 96, 0))
+    if preset == "dht22":
+        dht = sensor.snapshot()
+        parts.append((f"Temp: {dht['temp']} st.", 1, 0, 1, 0, 96, 0))
+        if dht["ok"]:
+            parts.append((f"Wilg: {dht['hum']} pct.", 1, 1, 1, 0, 96, 0))
         else:
             parts.append(("Brak czujnika", 1, 1, 1, 0, 96, 0))
         return parts
 
-    elif preset == "imieniny-static":
-        now = datetime.now()
+    if preset == "imieniny-static":
         parts.append(("IMIENINY", 2, 0, 1, 0, 96, 0))
         names = nameday_short(now, 18)
         if names:
             parts.append((names, 1, 1, 1, 0, 96, 0))
         return parts
 
-    elif preset == "imieniny-scroll":
-        now = datetime.now()
-        names = nameday_names_only(now)
-        parts.append((f"Imieniny: {names}", 1, 0, 1, 0, 96, 99))
-        return parts
+    if preset == "imieniny-scroll":
+        return [(f"Imieniny: {nameday_names_only(now)}", 1, 0, 1, 0, 96, 99)]
 
-    elif preset == "do-konca-roku":
-        now = datetime.now()
+    if preset in ("do-konca-roku", "do-konca-roku-scroll"):
         count = days_until_end_of_year(now)
-        dni_str = "dzień" if count == 1 else "dni"
-        if msg.get("_dkr_split", False):
-            parts.append(("Do końca roku", 2, 0, 1, 0, 96, 0))
-            parts.append((f"pozostało {count} {dni_str}", 1, 1, 1, 0, 96, 0))
-        else:
-            parts.append(("Do końca roku pozostało", 1, 0, 1, 0, 96, 0))
-            parts.append((f"{count} {dni_str}", 1, 1, 1, 0, 96, 0))
-        return parts
+        dni = "dzień" if count == 1 else "dni"
+        if preset == "do-konca-roku-scroll":
+            return [(f"Do końca roku pozostało {count} {dni}", 1, 0, 1, 0, 96, 99)]
+        if g("_dkr_split", False):
+            return [("Do końca roku", 2, 0, 1, 0, 96, 0),
+                    (f"pozostało {count} {dni}", 1, 1, 1, 0, 96, 0)]
+        return [("Do końca roku pozostało", 1, 0, 1, 0, 96, 0),
+                (f"{count} {dni}", 1, 1, 1, 0, 96, 0)]
 
-    elif preset == "do-konca-roku-scroll":
-        now = datetime.now()
-        count = days_until_end_of_year(now)
-        dni_str = "dzień" if count == 1 else "dni"
-        parts.append((f"Do końca roku pozostało {count} {dni_str}", 1, 0, 1, 0, 96, 99))
-        return parts
+    # custom / unknown preset
+    return [(gs("text"), gi("font", 1), gi("line", 0), gi("alignment", 0),
+             gi("pos_x", 0), gi("width", 96), gi("scroll", 0))]
 
-    else:  # custom
-        return [(msg.get("text", ""), msg.get("font", 1), msg.get("line", 0),
-                 msg.get("alignment", 0), msg.get("pos_x", 0),
-                 msg.get("width", 96), msg.get("scroll", 0))]
-
-def fill_dynamic(text):
-    """Replace __clock_time__ / __clock_date__ / __clock_nameday__ with actual values."""
-    now = datetime.now()
+def fill_dynamic(text, now):
+    """Resolve __placeholders__ (works in any text, kept for compatibility)."""
     if text == "__clock_time__":
         return now.strftime("%H:%M")
     if text == "__clock_date__":
@@ -682,217 +863,533 @@ def fill_dynamic(text):
         return " "
     return text
 
-def preset_frames(msg):
-    """Compute the hex frames for a preset without sending."""
-    parts = expand_preset(msg)
-    frames = []
-    for text, font, line, align, x, w, scroll in parts:
-        t = fill_dynamic(text)
+def preset_parts(msg, now=None):
+    """Expanded parts with placeholders filled and text sanitized (what the display gets)."""
+    now = now or now_dt()
+    out = []
+    for text, font, line, align, x, w, scroll in expand_preset(msg, now):
+        t = fill_dynamic(text, now)
         if t == "" and text.startswith("__"):
             t = " "
-        frames.append(make_message(t, font, line, align, x, w, scroll))
-    return frames
+        out.append((sanitize_text(t), font, line, align, x, w, scroll))
+    return out
 
-def send_preset(ser, msg, gap_ms=100, frames=None):
-    """Send a complete preset (may be multiple display commands) with gaps."""
-    if frames is None:
-        frames = preset_frames(msg)
-    logs = []
-    for frame in frames:
-        r = send_raw(ser, frame)
-        logs.append(r)
-        if len(frames) > 1:
-            time.sleep(gap_ms / 1000.0)
-    return "; ".join(logs)
+def parts_to_frames(parts):
+    return [make_message(*p) for p in parts]
 
-# ---- WebUI HTML ----
-_HERE = os.path.dirname(__file__)
-HTML_FILE = os.path.join(_HERE, "webui.html")
+def preset_frames(msg, now=None):
+    return parts_to_frames(preset_parts(msg, now))
 
-def load_html():
-    with open(HTML_FILE) as f:
-        return f.read()
+def parts_json(parts):
+    return [dict(zip(PART_KEYS, p)) for p in parts]
+
+# ---- DHT22 sensor (Arduino over serial: "T:23.5 H:45" lines, or "ERR") ----
+class Sensor:
+    STALE_SEC = 60
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.port = None
+        self.temp = "--.-"
+        self.hum = "--"
+        self._ok = False
+        self.updated = 0.0
+
+    def snapshot(self):
+        with self.lock:
+            ok = self._ok and time.monotonic() - self.updated < self.STALE_SEC
+            return {"temp": self.temp, "hum": self.hum, "ok": ok}
+
+    def set_reading(self, temp, hum):
+        with self.lock:
+            first = not self._ok
+            self.temp, self.hum, self._ok = temp, hum, True
+            self.updated = time.monotonic()
+        if first:
+            log(f"DHT22: {temp}C {hum}%")
+
+    def set_error(self):
+        with self.lock:
+            self._ok = False
+
+sensor = Sensor()
+
+def arduino_reader(port_path):
+    if serial is None:
+        log("pyserial not installed: DHT22 reader disabled")
+        return
+    sensor.port = port_path
+    log(f"Arduino reader: connecting to {port_path} ...")
+    last_err = None
+    while state.running:
+        try:
+            with serial.Serial(port_path, 9600, timeout=2) as ser:
+                log(f"Arduino DHT22 on {port_path}")
+                last_err = None
+                sensor.set_error()
+                while state.running:
+                    line = ser.readline().decode("utf-8", errors="ignore").strip()
+                    if line.startswith("T:") and " H:" in line:
+                        try:
+                            p = line.split()
+                            temp_s, hum_s = p[0][2:], p[1][2:]
+                            float(temp_s), float(hum_s)
+                            sensor.set_reading(temp_s, hum_s)
+                        except (ValueError, IndexError):
+                            pass
+                    elif line == "ERR":
+                        sensor.set_error()
+        except Exception as e:
+            sensor.set_error()
+            if str(e) != last_err:  # don't spam the log while unplugged
+                log(f"Arduino serial error: {e}")
+                last_err = str(e)
+            time.sleep(5)
 
 # ---- State ----
+DEFAULT_SETTINGS = {
+    "display_number": 29,
+    "preset_gap_ms": 100,
+    "keepalive_sec": 60,
+    "queue_running": True,
+    "random_mode": False,
+}
+# key -> (type, min, max); unknown keys are kept as-is for compatibility
+SETTING_SPECS = {
+    "display_number": (int, 0, 63),
+    "preset_gap_ms": (int, 10, 2000),
+    "keepalive_sec": (int, 0, 3600),
+    "queue_running": (bool, None, None),
+    "random_mode": (bool, None, None),
+}
+
+def _empty_override():
+    return {"active": False, "message": {}, "expires_at": 0}
+
 class State:
     def __init__(self):
+        self.lock = threading.RLock()
+        self.wake = threading.Event()
+        self.running = False
         self.messages = []
-        self.settings = {
-            "display_number": 29,
-            "preset_gap_ms": 100,
-            "keepalive_sec": 60,
-            "queue_running": True,
-            "random_mode": False,
-        }
-        self.override = {"active": False, "message": {}, "expires_at": 0}
-        self.queue_pos = 0
-        self.queue_thread_running = False
-        self.serial = None
-        self.dht22_temp_str = "--.-"
-        self.dht22_hum_str = "--"
-        self.dht22_ok = False
+        self.settings = dict(DEFAULT_SETTINGS)
+        self.override = _empty_override()
+        self.ov_seq = 0          # bumps on every override change
+        self.version = 0         # bumps on every message list change (UI refetch hint)
+        self.current = None      # what the engine is showing (slot dict)
+        self.queue_pos = 0       # 1-based position of the current queue message
+        self.force_next = False
+        self.pending_skip = None
+        self.last_frames = None
+        self.last_parts = None
+        self.last_preset = None
+        self.last_sent = 0.0
+        self.held = None         # "clear"/"test" while the display shows something else
+        self.time_offset = 0.0   # system clock minus browser clock (seconds)
+        self.synced_at = 0
+        self.tz = None
+        self.tz_name = None
+        self.display = Display()
 
     def next_id(self):
-        import uuid
-        return str(uuid.uuid4())[:8]
+        ids = {m.get("id") for m in self.messages}
+        while True:
+            i = uuid.uuid4().hex[:8]
+            if i not in ids:
+                return i
+
+    def touch(self):
+        self.version += 1
+        self.wake.set()
 
 state = State()
 
+# ---- Time (browser sync corrects a Pi without RTC/NTP) ----
+def now_ts():
+    return time.time() - state.time_offset
+
+def now_dt():
+    tz = state.tz
+    if tz is not None:
+        return datetime.fromtimestamp(now_ts(), tz).replace(tzinfo=None)
+    return datetime.fromtimestamp(now_ts())
+
+def utc_offset_min():
+    ts = now_ts()
+    return int(round(((now_dt() - datetime(1970, 1, 1)).total_seconds() - ts) / 60.0))
+
+# ---- Persistence (atomic writes; a corrupt file is kept aside, never overwritten) ----
+def _atomic_write_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+def _quarantine(path, err):
+    bad = f"{path}.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    try:
+        os.replace(path, bad)
+        log(f"Failed to load {path}: {err}; moved it to {bad}")
+    except OSError:
+        log(f"Failed to load {path}: {err}")
+
 def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({"messages": state.messages}, f, ensure_ascii=False, indent=2)
+    with state.lock:
+        data = {"messages": state.messages}
+        try:
+            _atomic_write_json(DATA_FILE, data)
+        except OSError as e:
+            log(f"Failed to save {DATA_FILE}: {e}")
 
 def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            state.messages = data.get("messages", [])
-            print(f"Loaded {len(state.messages)} messages from {DATA_FILE}")
-        except Exception as e:
-            print(f"Failed to load {DATA_FILE}: {e}")
+    if not os.path.exists(DATA_FILE):
+        return
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        msgs = data.get("messages", []) if isinstance(data, dict) else data
+        if not isinstance(msgs, list):
+            raise ValueError("'messages' is not a list")
+    except Exception as e:
+        _quarantine(DATA_FILE, e)
+        return
+    seen, out = set(), []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        if not m.get("id") or m["id"] in seen:
+            m["id"] = uuid.uuid4().hex[:8]
+        seen.add(m["id"])
+        out.append(m)
+    state.messages = out
+    log(f"Loaded {len(out)} messages from {DATA_FILE}")
+
+def coerce_settings(new, base):
+    """Merge validated values from `new` into a copy of `base`. Returns (merged, errors)."""
+    out, errors = dict(base), []
+    for k, v in new.items():
+        spec = SETTING_SPECS.get(k)
+        if spec is None:
+            out[k] = v
+            continue
+        typ, lo, hi = spec
+        if typ is bool:
+            if isinstance(v, str):
+                v = v.strip().lower() in ("1", "true", "yes", "on")
+            out[k] = bool(v)
+        else:
+            iv = _int(v, None)
+            if iv is None or isinstance(v, bool):
+                errors.append(f"{k}: not a number")
+                continue
+            out[k] = max(lo, min(hi, iv))
+    return out, errors
 
 def save_settings():
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(state.settings, f, ensure_ascii=False, indent=2)
+    with state.lock:
+        try:
+            _atomic_write_json(SETTINGS_FILE, state.settings)
+        except OSError as e:
+            log(f"Failed to save {SETTINGS_FILE}: {e}")
 
 def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            state.settings.update(saved)
-            print(f"Loaded settings from {SETTINGS_FILE}")
-        except Exception as e:
-            print(f"Failed to load {SETTINGS_FILE}: {e}")
+    if not os.path.exists(SETTINGS_FILE):
+        return
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if not isinstance(saved, dict):
+            raise ValueError("not an object")
+    except Exception as e:
+        _quarantine(SETTINGS_FILE, e)
+        return
+    state.settings, _ = coerce_settings(saved, state.settings)
+    log(f"Loaded settings from {SETTINGS_FILE}")
 
-def queue_loop():
-    while state.queue_thread_running:
-        if state.override.get("active"):
-            exp = state.override.get("expires_at", 0)
-            if exp and time.time() >= exp:
-                state.override = {"active": False, "message": {}, "expires_at": 0}
+# ---- Display engine (the only place that drives the queue) ----
+def is_visible(m, t):
+    if m.get("hidden"):
+        return False
+    sched = m.get("schedule") or {}
+    if isinstance(sched, dict) and sched.get("enabled"):
+        f, to = _int(sched.get("from_ts"), 0), _int(sched.get("to_ts"), 0)
+        if f and t < f:
+            return False
+        if to and t > to:
+            return False
+    return True
+
+def _find(mid):
+    for i, m in enumerate(state.messages):
+        if m.get("id") == mid:
+            return i
+    return None
+
+def _pick_next(t, cur_idx, cur_id):
+    msgs = state.messages
+    n = len(msgs)
+    visible = [i for i, m in enumerate(msgs) if is_visible(m, t)]
+    if not visible:
+        return None
+    if state.settings.get("random_mode"):
+        choices = [i for i in visible if msgs[i].get("id") != cur_id] or visible
+        return random.choice(choices)
+    start = 0 if cur_idx is None else cur_idx
+    for k in range(n):
+        i = (start + k) % n
+        if i in visible:
+            return i
+    return visible[0]
+
+def _queue_slot(i, t, explicit=False):
+    m = state.messages[i]
+    return {"key": ("queue", m.get("id"), t), "source": "queue", "id": m.get("id"),
+            "index": i, "msg": m, "since": t,
+            "until": t + max(1, _int(m.get("duration_sec", 10), 10)), "explicit": explicit}
+
+def _needs_blank(preset, old_parts, new_parts):
+    if old_parts is None or preset != state.last_preset:
+        return True
+    if preset == "clock":
+        # Same heuristic as before: only blank when the hour's first digit/length changes.
+        old_t, new_t = old_parts[0][0], new_parts[0][0]
+        return not (old_t and new_t and old_t[0] == new_t[0] and len(old_t) == len(new_t))
+    return [p[1:] for p in old_parts] != [p[1:] for p in new_parts]
+
+def tick():
+    t = now_ts()
+    blank_only = False
+    with state.lock:
+        ov = state.override
+        exp = _int(ov.get("expires_at"), 0)
+        if ov.get("active") and exp and t >= exp:
+            log("Override expired")
+            state.override = ov = _empty_override()
+            state.ov_seq += 1
+            state.force_next = True
+        cur = state.current
+        want, new_slot, force = None, False, False
+        q_running = state.settings.get("queue_running", True)
+
+        if ov.get("active") and isinstance(ov.get("message"), dict) and ov["message"]:
+            key = ("override", state.ov_seq)
+            if cur and cur["key"] == key:
+                want = cur
             else:
-                om = state.override.get("message", {})
-                if om.get("preset_id") in ("clock", "imieniny"):
-                    frames = preset_frames(om)
-                    if frames != getattr(state, 'last_frames', None):
-                        do_clear = True
-                        if om.get("preset_id") == "clock":
-                            old = getattr(state, '_clock_time', '')
-                            new = fill_dynamic("__clock_time__")
-                            if old and new and old[0] == new[0] and len(old) == len(new):
-                                do_clear = False
-                            state._clock_time = new
-                        if do_clear:
-                            send_blank(state.serial)
-                            time.sleep(0.05)
-                        send_preset(state.serial, om, state.settings.get("preset_gap_ms", 100), frames)
-                        state.last_frames = frames
-            time.sleep(1)
-            continue
-        if not state.settings["queue_running"]:
-            time.sleep(1)
-            continue
-        now = time.time()
-        visible = []
-        for m in state.messages:
-            if m.get("hidden"):
-                continue
-            sched = m.get("schedule") or {}
-            if sched.get("enabled"):
-                if sched.get("from_ts", 0) and now < sched["from_ts"]:
-                    continue
-                if sched.get("to_ts", 0) and now > sched["to_ts"]:
-                    continue
-            visible.append(m)
-        if not visible:
-            time.sleep(1)
-            continue
-        if state.queue_pos >= len(state.messages):
-            state.queue_pos = 0
-        msg = state.messages[state.queue_pos]
-        if msg.get("hidden"):
-            state.queue_pos += 1
-            continue
-        if now < getattr(state, 'display_until', 0):
-            time.sleep(1)
-            continue
-        frames = preset_frames(msg)
-        if frames != getattr(state, 'last_frames', None):
-            send_blank(state.serial)
-            time.sleep(0.05)
-            send_preset(state.serial, msg, state.settings.get("preset_gap_ms", 100), frames)
-            state.last_frames = frames
-        state.display_until = now + msg.get("duration_sec", 10)
-        if state.settings.get("random_mode"):
-            import random
-            state.queue_pos = state.messages.index(random.choice(visible))
-        else:
-            state.queue_pos += 1
+                want = {"key": key, "source": "override", "id": None, "index": None,
+                        "since": t, "until": exp, "explicit": True}
+                new_slot = force = True
+            want["msg"] = ov["message"]
+        elif state.pending_skip is not None:
+            i = _find(state.pending_skip)
+            state.pending_skip = None
+            if i is not None:
+                want, new_slot, force = _queue_slot(i, t, explicit=True), True, True
+        if want is None and not new_slot:
+            cur_q = cur if cur and cur["source"] == "queue" else None
+            idx = _find(cur_q["id"]) if cur_q else None
+            if q_running or state.force_next:
+                m = state.messages[idx] if idx is not None else None
+                advance = (state.force_next or m is None or t >= cur_q["until"]
+                           or (m.get("hidden") and not cur_q["explicit"]))
+                state.force_next = False
+                if advance:
+                    if idx is not None:
+                        start = idx + 1
+                    elif cur_q is not None:
+                        start = cur_q["index"]  # deleted: whatever slid into its place
+                    else:
+                        start = max(0, state.queue_pos)  # after override / at startup
+                    nxt = _pick_next(t, start % max(1, len(state.messages)) if state.messages else None,
+                                     cur_q["id"] if cur_q else None)
+                    if nxt is None:
+                        blank_only = cur is not None
+                        state.current = None
+                    else:
+                        want, new_slot = _queue_slot(nxt, t), True
+                else:
+                    want = cur_q
+                    want["msg"], want["index"] = m, idx
+            elif cur_q is not None and idx is not None:
+                want = cur_q  # paused: keep refreshing what's on screen
+                want["msg"], want["index"] = state.messages[idx], idx
 
-def arduino_reader(port_path):
-    print(f"Arduino reader: connecting to {port_path} ...")
-    while state.queue_thread_running:
+        if want is not None:
+            state.current = want
+            if want["source"] == "queue":
+                state.queue_pos = want["index"] + 1
+            msg = want["msg"]
+        gap = _int(state.settings.get("preset_gap_ms", 100), 100)
+        keepalive = _int(state.settings.get("keepalive_sec", 0), 0)
+
+    if blank_only:
+        state.display.send([], blank=True)
+        state.last_frames = state.last_parts = state.last_preset = None
+        state.held = None
+        return
+    if want is None:
+        return
+
+    parts = preset_parts(msg)
+    frames = parts_to_frames(parts)
+    preset = msg.get("preset_id", "custom")
+    want["parts"] = parts
+    if new_slot:
+        send = force or state.held or frames != state.last_frames
+        blank = True
+    elif frames != state.last_frames:
+        send, blank = True, _needs_blank(preset, state.last_parts, parts)
+    else:
+        send = (keepalive > 0 and not state.held
+                and time.monotonic() - state.last_sent >= keepalive
+                and all(p[6] == 0 for p in parts))
+        blank = False
+    if send:
+        state.display.send(frames, gap, blank=blank)
+        state.last_frames, state.last_parts, state.last_preset = frames, parts, preset
+        state.last_sent = time.monotonic()
+        state.held = None
+
+def display_loop():
+    while state.running:
         try:
-            ser = serial.Serial(port_path, 9600, timeout=2)
-            print(f"Arduino DHT22 on {port_path}")
-            state.dht22_ok = False
-            while state.queue_thread_running:
-                line = ser.readline().decode("utf-8", errors="ignore").strip()
-                if not line:
-                    continue
-                if line.startswith("T:") and " H:" in line:
-                    try:
-                        parts = line.split()
-                        temp_s = parts[0][2:]
-                        hum_s = parts[1][2:]
-                        float(temp_s)
-                        float(hum_s)
-                        state.dht22_temp_str = temp_s
-                        state.dht22_hum_str = hum_s
-                        if not state.dht22_ok:
-                            print(f"DHT22: {temp_s}C {hum_s}%")
-                        state.dht22_ok = True
-                    except (ValueError, IndexError):
-                        pass
-                elif line == "ERR":
-                    state.dht22_ok = False
-        except serial.SerialException as e:
-            print(f"Arduino serial error: {e}")
-            state.dht22_ok = False
-            time.sleep(5)
-        except Exception as e:
-            print(f"Arduino reader error: {e}")
-            state.dht22_ok = False
-            time.sleep(5)
+            state.display.maybe_reconnect()
+            state.display.check_presence(_int(state.settings.get("display_number", 29), 29))
+            tick()
+        except Exception:
+            log("Display loop error (continuing):\n" + traceback.format_exc())
+            time.sleep(1)
+        state.wake.wait(0.5)
+        state.wake.clear()
 
 # ---- HTTP ----
+class BadRequest(Exception):
+    pass
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+_html_cache = {"mtime": None, "body": b""}
+
+def load_html():
+    try:
+        mtime = os.path.getmtime(HTML_FILE)
+        if mtime != _html_cache["mtime"]:
+            with open(HTML_FILE, "rb") as f:
+                _html_cache["body"] = f.read()
+            _html_cache["mtime"] = mtime
+    except OSError as e:
+        if _html_cache["mtime"] is None:
+            _html_cache["body"] = f"<h1>webui.html missing</h1><p>{e}</p>".encode()
+    return _html_cache["body"]
+
+def status_payload():
+    with state.lock:
+        cur = state.current
+        current = None
+        if cur:
+            m = cur.get("msg") or {}
+            current = {
+                "source": cur["source"], "id": cur.get("id"), "index": cur.get("index"),
+                "preset_id": m.get("preset_id", "custom"), "since": cur.get("since"),
+                "until": cur.get("until") or 0, "parts": parts_json(cur.get("parts") or []),
+            }
+        dht = sensor.snapshot()
+        return {
+            "ok": True,
+            "display_connected": state.display.connected,
+            "display_port": state.display.path,
+            "display_responding": state.display.responding,
+            "display_firmware": state.display.firmware,
+            "queue_running": state.settings.get("queue_running", True),
+            "queue_position": state.queue_pos,
+            "messages_count": len(state.messages),
+            "override_active": bool(state.override.get("active")),
+            "override_message": state.override.get("message", {}),
+            "override_expires_at": state.override.get("expires_at", 0),
+            "time_synced": state.synced_at > 0,
+            "settings": state.settings,
+            "dht22_temp": dht["temp"],
+            "dht22_hum": dht["hum"],
+            "dht22_ok": dht["ok"],
+            "sensor_port": sensor.port,
+            "current": current,
+            "held": state.held,
+            "version": state.version,
+            "server_time": now_ts(),
+            "utc_offset_min": utc_offset_min(),
+            "tz": state.tz_name,
+        }
+
 class Handler(BaseHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        self.html = kwargs.pop("html", "")
-        super().__init__(*args, **kwargs)
+    server_version = "RGDisplay/2"
+
+    def log_request(self, code="-", size="-"):
+        # Keep the log (and the Pi's SD card) quiet: only log changes and errors.
+        if self.command in ("GET", "HEAD", "OPTIONS") and str(code)[:1] in ("2", "3"):
+            return
+        super().log_request(code, size)
+
+    def _send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _json(self, data, code=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send(code, json.dumps(data, ensure_ascii=False).encode("utf-8"),
+                   "application/json; charset=utf-8")
 
-    def _html(self, html):
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    def _html(self):
+        self._send(200, load_html(), "text/html; charset=utf-8")
 
-    def _body(self):
-        n = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(n)) if n else {}
+    def _body(self, want=dict):
+        n = _int(self.headers.get("Content-Length", 0), 0)
+        if n > 1_000_000:
+            raise BadRequest("body too large")
+        raw = self.rfile.read(n) if n > 0 else b""
+        if not raw.strip():
+            return want()
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise BadRequest(f"invalid JSON: {e}")
+        if not isinstance(data, want):
+            raise BadRequest(f"expected a JSON {'object' if want is dict else 'array'}")
+        return data
+
+    def _id(self):
+        mid = parse_qs(urlparse(self.path).query).get("id", [None])[0]
+        if not mid:
+            raise BadRequest("missing id")
+        return mid
+
+    def _dispatch(self, routes):
+        p = urlparse(self.path).path.rstrip("/") or "/"
+        fn = routes.get(p)
+        try:
+            if fn is None:
+                if self.command in ("GET", "HEAD") and not p.startswith("/api/"):
+                    return self._html()
+                return self._json({"error": "not found"}, 404)
+            fn()
+        except BadRequest as e:
+            self._json({"error": str(e)}, 400)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            log("Request error:\n" + traceback.format_exc())
+            try:
+                self._json({"error": f"internal error: {e}"}, 500)
+            except Exception:
+                pass
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -902,194 +1399,259 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        p = urlparse(self.path).path.rstrip("/")
-        if p in ("", "/"):
-            return self._html(self.html)
-        elif p == "/api/status":
-            self._json({
-                "ok": True,
-                "display_connected": state.serial is not None,
-                "queue_running": state.settings["queue_running"],
-                "queue_position": state.queue_pos,
-                "messages_count": len(state.messages),
-                "override_active": state.override.get("active", False),
-                "override_message": state.override.get("message", {}),
-                "time_synced": getattr(state, '_synced_time', 0) > 0,
-                "settings": state.settings,
-                "dht22_temp": state.dht22_temp_str,
-                "dht22_hum": state.dht22_hum_str,
-                "dht22_ok": state.dht22_ok,
-            })
-        elif p == "/api/messages":
-            self._json({"messages": state.messages})
-        elif p == "/api/settings":
-            self._json(state.settings)
-        elif p == "/api/override":
-            self._json(state.override)
-        else:
-            self._html(self.html)
+        self._dispatch({
+            "/": self._html,
+            "/api/status": lambda: self._json(status_payload()),
+            "/api/messages": self.get_messages,
+            "/api/settings": lambda: self._json(state.settings),
+            "/api/override": lambda: self._json(state.override),
+        })
+
+    do_HEAD = do_GET
 
     def do_POST(self):
-        p = urlparse(self.path).path.rstrip("/")
-        if p == "/api/messages":
-            msg = self._body()
-            if not msg.get("id"):
+        self._dispatch({
+            "/api/messages": self.create_message,
+            "/api/messages/reorder": self.reorder,
+            "/api/test": self.test,
+            "/api/discover": self.discover,
+            "/api/override": self.set_override,
+            "/api/cancel-override": self.cancel_override,
+            "/api/clear": self.clear,
+            "/api/time": self.sync_time,
+            "/api/skip-to-message": self.skip_to,
+            "/api/next": self.next_message,
+            "/api/preview": self.preview,
+        })
+
+    def do_PUT(self):
+        self._dispatch({"/api/messages": self.update_message, "/api/settings": self.update_settings})
+
+    def do_DELETE(self):
+        self._dispatch({"/api/messages": self.delete_message})
+
+    # -- messages --
+    def get_messages(self):
+        with state.lock:
+            self._json({"messages": state.messages, "version": state.version})
+
+    def create_message(self):
+        msg = self._body()
+        with state.lock:
+            if not msg.get("id") or _find(msg["id"]) is not None:
                 msg["id"] = state.next_id()
             state.messages.append(msg)
             save_data()
-            self._json(msg, 201)
-        elif p == "/api/test":
-            r = send_preset(state.serial, {"text": f"TEST {state.settings['display_number']}",
-                "font": 3, "line": 0, "alignment": 1, "pos_x": 0, "width": 96, "scroll": 0,
-                "preset_id": "single-static"}, gap_ms=100)
-            self._json({"result": r})
-        elif p == "/api/discover":
-            self._json({"result": "Discovery only works on ESP (scans addresses 1-31)"})
-        elif p == "/api/override":
-            b = self._body()
-            state.override = b
-            if b.get("active") and b.get("message"):
-                msg = b["message"]
-                frames = preset_frames(msg)
-                send_blank(state.serial)
-                time.sleep(0.05)
-                send_preset(state.serial, msg, state.settings.get("preset_gap_ms", 100), frames)
-                state.last_frames = frames
-            self._json(state.override)
-        elif p == "/api/cancel-override":
-            state.override = {"active": False, "message": {}, "expires_at": 0}
-            self._json({"ok": True})
-        elif p == "/api/clear":
-            send_blank(state.serial)
-            self._json({"ok": True})
-        elif p == "/api/messages/reorder":
-            b = self._body()
-            ids = b.get("ids", [])
-            lookup = {m.get("id"): m for m in state.messages}
-            state.messages = [lookup[i] for i in ids if i in lookup]
+            state.touch()
+        self._json(msg, 201)
+
+    def update_message(self):
+        mid, b = self._id(), self._body()
+        with state.lock:
+            i = _find(mid)
+            if i is None:
+                return self._json({"error": "not found"}, 404)
+            b["id"] = mid
+            state.messages[i] = b
             save_data()
-            self._json({"ok": True})
-        elif p == "/api/time":
-            b = self._body()
-            ts = b.get("unix_seconds", 0)
-            if ts:
-                import datetime
-                state._synced_time = ts
-                state._synced_time_offset = time.time() - ts
-                print(f"Time synced: {ts} ({datetime.datetime.fromtimestamp(ts)})")
-            self._json({"ok": True})
-        elif p == "/api/skip-to-message":
-            q = parse_qs(urlparse(self.path).query)
-            mid = q.get("id", [None])[0]
-            if not mid:
-                return self._json({"error": "missing id"}, 400)
-            for i, m in enumerate(state.messages):
-                if m.get("id") == mid:
-                    state.override = {"active": False, "message": {}, "expires_at": 0}
-                    state.queue_pos = i + 1
-                    state.display_until = time.time() + m.get("duration_sec", 10)
-                    frames = preset_frames(m)
-                    send_blank(state.serial)
-                    time.sleep(0.05)
-                    send_preset(state.serial, m, state.settings.get("preset_gap_ms", 100), frames)
-                    state.last_frames = frames
-                    return self._json({"ok": True, "index": i})
-            self._json({"error": "not found"}, 404)
-        else:
-            self._json({"error": "not found"}, 404)
+            state.touch()
+        self._json(b)
 
-    def do_PUT(self):
-        p = urlparse(self.path).path.rstrip("/")
-        q = parse_qs(urlparse(self.path).query)
-        if p == "/api/messages":
-            mid = q.get("id", [None])[0]
-            if not mid:
-                return self._json({"error": "missing id"}, 400)
-            b = self._body()
-            for i, m in enumerate(state.messages):
-                if m.get("id") == mid:
-                    b["id"] = mid
-                    state.messages[i] = b
-                    save_data()
-                    return self._json(b)
-            self._json({"error": "not found"}, 404)
-        elif p == "/api/settings":
-            state.settings.update(self._body())
-            save_settings()
-            self._json(state.settings)
-        else:
-            self._json({"error": "not found"}, 404)
-
-    def do_DELETE(self):
-        p = urlparse(self.path).path.rstrip("/")
-        q = parse_qs(urlparse(self.path).query)
-        if p == "/api/messages":
-            mid = q.get("id", [None])[0]
-            if not mid:
-                return self._json({"error": "missing id"}, 400)
+    def delete_message(self):
+        mid = self._id()
+        with state.lock:
             state.messages = [m for m in state.messages if m.get("id") != mid]
             save_data()
-            self._json({"ok": True})
-        else:
-            self._json({"error": "not found"}, 404)
+            state.touch()
+        self._json({"ok": True})
+
+    def reorder(self):
+        ids = self._body().get("ids", [])
+        if not isinstance(ids, list):
+            raise BadRequest("ids must be a list")
+        with state.lock:
+            lookup = {m.get("id"): m for m in state.messages}
+            ordered = [lookup.pop(i) for i in ids if i in lookup]
+            # Messages missing from `ids` (e.g. added by another client meanwhile) are kept.
+            state.messages = ordered + [m for m in state.messages if m.get("id") in lookup]
+            save_data()
+            state.touch()
+        self._json({"ok": True})
+
+    def skip_to(self):
+        mid = self._id()
+        with state.lock:
+            i = _find(mid)
+            if i is None:
+                return self._json({"error": "not found"}, 404)
+            if state.override.get("active"):
+                state.override = _empty_override()
+                state.ov_seq += 1
+            state.pending_skip = mid
+            state.wake.set()
+        self._json({"ok": True, "index": i})
+
+    def next_message(self):
+        with state.lock:
+            state.force_next = True
+            state.wake.set()
+        self._json({"ok": True})
+
+    # -- override --
+    def set_override(self):
+        b = self._body()
+        msg = b.get("message") or {}
+        if not isinstance(msg, dict):
+            raise BadRequest("message must be an object")
+        ov = dict(b)
+        ov["message"] = msg
+        ov["active"] = bool(b.get("active")) and bool(msg)
+        exp = _int(b.get("expires_at"), 0)
+        if _int(b.get("expires_in"), 0) > 0:
+            exp = int(now_ts()) + _int(b["expires_in"], 0)
+        ov["expires_at"] = exp
+        ov.pop("expires_in", None)
+        with state.lock:
+            state.override = ov
+            state.ov_seq += 1
+            if not ov["active"]:
+                state.force_next = True
+            state.wake.set()
+        self._json(ov)
+
+    def cancel_override(self):
+        with state.lock:
+            state.override = _empty_override()
+            state.ov_seq += 1
+            state.force_next = True
+            state.wake.set()
+        self._json({"ok": True})
+
+    # -- display --
+    def clear(self):
+        state.display.send([], blank=True)
+        state.held = "clear"
+        self._json({"ok": True})
+
+    def test(self):
+        with state.lock:
+            n = state.settings.get("display_number", 29)
+        frames = preset_frames({"text": f"TEST {n}", "font": 3, "line": 0, "alignment": 1,
+                                "pos_x": 0, "width": 96, "scroll": 0, "preset_id": "single-static"})
+        r = state.display.send(frames, 100)
+        state.held = "test"
+        self._json({"result": r})
+
+    def discover(self):
+        b = self._body()
+        lo, hi = _clamp(b.get("from", 1), 0, 63, 1), _clamp(b.get("to", 63), 0, 63, 63)
+        disp = state.display
+        if not disp.connected:
+            return self._json({"result": "Simulation mode: no RS485 port to scan", "found": []})
+        if not disp.scan_lock.acquire(blocking=False):
+            return self._json({"error": "a scan is already running"}, 409)
+        try:
+            log(f"Scanning displays {lo}-{hi} ...")
+            found = disp.scan(range(lo, hi + 1))
+        finally:
+            disp.scan_lock.release()
+        names = ", ".join(f"{f['number']}" + (f" ({f['firmware']})" if f["firmware"] else "") for f in found)
+        result = f"Found: {names}" if found else f"No display answered on {lo}-{hi}"
+        log(result)
+        self._json({"result": result, "found": found})
+
+    def preview(self):
+        b = self._body()
+        msg = b.get("message") if isinstance(b.get("message"), dict) else b
+        parts = preset_parts(msg)
+        self._json({"parts": parts_json(parts), "frames": len(parts)})
+
+    # -- settings / time --
+    def update_settings(self):
+        b = self._body()
+        with state.lock:
+            state.settings, errors = coerce_settings(b, state.settings)
+            save_settings()
+            state.wake.set()
+            self._json(state.settings if not errors else dict(state.settings, _errors=errors))
+
+    def sync_time(self):
+        b = self._body()
+        ts = b.get("unix_seconds", 0)
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool) or ts <= 0:
+            return self._json({"ok": True})
+        offset = time.time() - float(ts)
+        tz, tz_name = None, None
+        name = b.get("tz")
+        if isinstance(name, str) and name and ZoneInfo is not None:
+            try:
+                tz, tz_name = ZoneInfo(name), name
+            except Exception:
+                tz = None
+        if tz is None and isinstance(b.get("tz_offset_min"), (int, float)):
+            tz = timezone(timedelta(minutes=b["tz_offset_min"]))
+            tz_name = f"UTC{b['tz_offset_min'] / 60:+g}"
+        with state.lock:
+            state.time_offset = offset if abs(offset) >= 2 else 0.0
+            state.synced_at = float(ts)
+            if tz is not None:
+                state.tz, state.tz_name = tz, tz_name
+            state.wake.set()
+        log(f"Time synced: {now_dt():%Y-%m-%d %H:%M:%S} (offset {offset:+.1f}s, tz {tz_name or 'system'})")
+        self._json({"ok": True, "offset": state.time_offset, "tz": state.tz_name})
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="RG Display Server")
     ap.add_argument("--port", default=8080, type=int)
+    ap.add_argument("--bind", default="0.0.0.0", help="Address to listen on (default 0.0.0.0)")
     ap.add_argument("--serial", default="/dev/ttyAMA0")
     ap.add_argument("--arduino-serial", default=None, help="Serial port for DHT22 Arduino")
     ap.add_argument("--rs485-gpio", type=int, default=None, help="BCM GPIO pin tied to MAX485 RE+DE for direction control")
     args = ap.parse_args()
 
-    try:
-        ser = serial.Serial(args.serial, 9600, timeout=2)
-        ser.rts = False
-        time.sleep(0.3)
-        state.serial = ser
-        print(f"RS485 on {args.serial}")
-    except Exception as e:
-        print(f"No serial ({e}) — SIMULATION MODE")
-        state.serial = None
+    load_data()
+    load_settings()
 
+    disp = Display(args.serial)
     if args.rs485_gpio is not None:
         if GPIO is not None:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(args.rs485_gpio, GPIO.OUT, initial=GPIO.LOW)
-            state.rs485_gpio = args.rs485_gpio
-            print(f"RS485 GPIO direction on pin {args.rs485_gpio}")
+            disp.gpio_pin = args.rs485_gpio
+            log(f"RS485 GPIO direction on pin {args.rs485_gpio}")
         else:
-            print("Warning: RPi.GPIO not available, --rs485-gpio ignored")
-
-    load_data()
-    load_settings()
-
-    state.queue_thread_running = True
+            log("Warning: RPi.GPIO not available, --rs485-gpio ignored")
+    disp.open()
+    state.display = disp
+    state.running = True
 
     if args.arduino_serial:
         threading.Thread(target=arduino_reader, args=(args.arduino_serial,), daemon=True).start()
     else:
-        print("No Arduino sensor (use --arduino-serial /dev/... for DHT22)")
+        log("No Arduino sensor (use --arduino-serial /dev/... for DHT22)")
 
-    html = load_html()
-    print(f"WebUI loaded ({len(html)} bytes)")
+    log(f"WebUI: {HTML_FILE} ({len(load_html())} bytes)")
+    threading.Thread(target=display_loop, daemon=True).start()
 
-    threading.Thread(target=queue_loop, daemon=True).start()
+    def _term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _term)
 
-    handler = partial(Handler, html=html)
-    srv = HTTPServer(("0.0.0.0", args.port), handler)
-    print(f"Server: http://localhost:{args.port}/")
+    srv = ThreadingHTTPServer((args.bind, args.port), Handler)
+    log(f"Server: http://localhost:{args.port}/")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        state.queue_thread_running = False
+        state.running = False
+        state.wake.set()
         save_data()
-        if state.serial:
-            state.serial.close()
-        if getattr(state, 'rs485_gpio', None) is not None:
+        disp.close()
+        if disp.gpio_pin is not None:
             GPIO.cleanup()
         srv.server_close()
+        log("Stopped")
 
 if __name__ == "__main__":
     main()
