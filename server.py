@@ -3,9 +3,9 @@
 RG Display Server: local RS485 controller for R&G LED displays.
 Run: python3 server.py [--port 8080] [--serial /dev/...] [--arduino-serial /dev/...] [--rs485-gpio N]
 
-Compatible with Python 3.7+ (Raspberry Pi OS Buster and newer).
+Compatible with Python 3.7+ (Raspberry Pi OS Buster and newer), Linux, macOS and Windows.
 """
-import argparse, json, os, random, signal, threading, time, traceback, unicodedata, uuid
+import argparse, glob, json, os, random, signal, sys, threading, time, traceback, unicodedata, uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -29,6 +29,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(HERE, "messages.json")
 SETTINGS_FILE = os.path.join(HERE, "settings.json")
 HTML_FILE = os.path.join(HERE, "webui.html")
+IS_WINDOWS = os.name == "nt"
+DEFAULT_SERIAL = None if IS_WINDOWS else "/dev/ttyAMA0"  # Pi UART; Windows has no sensible default
 
 # ---- Clock Data (mirrors clock.hpp) ----
 MONTH_PL = ["sty","lut","mar","kwi","maj","cze","lip","sie","wrz","paź","lis","gru"]
@@ -586,6 +588,10 @@ class Display:
         return self.ser is not None
 
     def open(self, announce=True):
+        if not self.path:
+            if announce:
+                log("No RS485 port configured: SIMULATION MODE (use --serial, e.g. /dev/ttyUSB0 or COM3)")
+            return False
         if serial is None:
             if announce:
                 log("pyserial not installed: SIMULATION MODE (pip install pyserial)")
@@ -609,7 +615,7 @@ class Display:
         if now < self._next_retry:
             return
         self._next_retry = now + self.RETRY_SEC
-        if os.path.exists(self.path):
+        if port_available(self.path):
             with self.lock:
                 self.open(announce=False)
 
@@ -1025,7 +1031,14 @@ def _atomic_write_json(path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # Windows: target briefly open by an editor/antivirus
+            if attempt == 4:
+                raise
+            time.sleep(0.1)
 
 def _quarantine(path, err):
     bad = f"{path}.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -1270,7 +1283,8 @@ class BadRequest(Exception):
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # On Windows SO_REUSEADDR lets a second server bind the same port silently; avoid that.
+    allow_reuse_address = not IS_WINDOWS
 
 _html_cache = {"mtime": None, "body": b""}
 
@@ -1586,8 +1600,10 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(name, str) and name and ZoneInfo is not None:
             try:
                 tz, tz_name = ZoneInfo(name), name
-            except Exception:
+            except Exception as e:
                 tz = None
+                log(f"Time zone {name!r} not available ({e}); using a fixed UTC offset"
+                    + (". On Windows: pip install tzdata" if IS_WINDOWS else ""))
         if tz is None and isinstance(b.get("tz_offset_min"), (int, float)):
             tz = timezone(timedelta(minutes=b["tz_offset_min"]))
             tz_name = f"UTC{b['tz_offset_min'] / 60:+g}"
@@ -1600,14 +1616,151 @@ class Handler(BaseHTTPRequestHandler):
         log(f"Time synced: {now_dt():%Y-%m-%d %H:%M:%S} (offset {offset:+.1f}s, tz {tz_name or 'system'})")
         self._json({"ok": True, "offset": state.time_offset, "tz": state.tz_name})
 
+# ---- Serial port detection (--auto / --list-ports; used by start.sh and start.bat) ----
+def _same_port(a, b):
+    norm = lambda p: p.replace("\\\\.\\", "").lower() if IS_WINDOWS else p
+    return norm(a) == norm(b)
+
+def port_available(path):
+    """Whether a serial port exists now. COM ports aren't files, so ask pyserial on Windows."""
+    if not path:
+        return False
+    if os.path.exists(path):
+        return True
+    if serial is None:
+        return False
+    try:
+        from serial.tools import list_ports
+        return any(_same_port(p.device, path) for p in list_ports.comports())
+    except Exception:
+        return False
+
+def list_serial_ports():
+    """[(device, description)] of ports that could be the RS485 adapter or the Arduino."""
+    if serial is not None:
+        try:
+            from serial.tools import list_ports
+            out = []
+            for p in sorted(list_ports.comports(), key=lambda p: p.device):
+                base = os.path.basename(p.device)
+                if sys.platform == "darwin" and base.startswith("tty."):
+                    continue  # macOS lists cu.* and tty.* for each device; cu.* is the one to open
+                if not IS_WINDOWS and p.vid is None and not base.startswith("ttyAMA"):
+                    continue  # skip built-in/Bluetooth/virtual ports; keep USB and the Pi UART
+                desc = " ".join(x for x in (p.manufacturer, p.product or p.description)
+                                if x and x != "n/a" and x != p.device)
+                out.append((p.device, desc))
+            return out
+        except Exception:
+            pass
+    pats = (["/dev/cu.usbmodem*", "/dev/cu.usbserial*"] if sys.platform == "darwin"
+            else ["/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMA*"])
+    return [(d, "") for pat in pats for d in sorted(glob.glob(pat))]
+
+def auto_detect(args, ports=None, interactive=None, ask=input):
+    """Fill in args.serial / args.arduino_serial / args.rs485_gpio, asking when there's a terminal."""
+    if interactive is None:
+        interactive = sys.stdin is not None and sys.stdin.isatty()
+    say = lambda m: print(m, file=sys.stderr, flush=True)
+
+    def prompt(question, default):
+        if not interactive:
+            return default
+        try:
+            return (ask(question) or "").strip() or default
+        except EOFError:
+            return default
+
+    pi_auto = False
+    if (args.serial is None and sys.platform.startswith("linux") and GPIO is not None
+            and os.path.exists("/dev/ttyAMA0")):
+        say("Raspberry Pi detected with RPi.GPIO.")
+        args.serial, pi_auto = "/dev/ttyAMA0", True
+        say(f"RS485: {args.serial} (auto)")
+        if args.rs485_gpio is None:
+            args.rs485_gpio = 26
+            say(f"RS485 GPIO: pin {args.rs485_gpio} (auto)")
+
+    taken = [p for p in (args.serial, args.arduino_serial) if p]
+    devs = [d for d in (list_serial_ports() if ports is None else ports)
+            if not any(_same_port(d[0], t) for t in taken)
+            and not (pi_auto and os.path.basename(d[0]).startswith("ttyAMA"))]
+    show = lambda d: f"{d[0]}  {d[1]}".rstrip()
+
+    def pick(question):
+        say(question)
+        for i, d in enumerate(devs, 1):
+            say(f"  [{i}] {show(d)}")
+        c = prompt(f"Choose [1-{len(devs)}] or 0 for none: ", "0")
+        if c.isdigit() and 1 <= int(c) <= len(devs):
+            return devs.pop(int(c) - 1)[0]
+        return None
+
+    if devs and not interactive and (args.serial is None or args.arduino_serial is None):
+        say(f"Not interactive: skipping device prompts (found: {', '.join(d[0] for d in devs)}). "
+            "Use --serial / --arduino-serial.")
+    elif devs:
+        if args.serial is None:
+            if len(devs) == 1:
+                say(f"Single serial device found: {show(devs[0])}")
+                role = prompt("Is it the [R]S485 display interface or the DHT22 [A]rduino? ", "R")
+                if role[:1].lower() == "a":
+                    args.arduino_serial = devs[0][0]
+                else:
+                    args.serial = devs[0][0]
+                devs.clear()
+            else:
+                args.serial = pick("Which device is the RS485 display interface?")
+        if args.arduino_serial is None and len(devs) == 1:
+            yn = prompt(f"Use {devs[0][0]} as the DHT22 Arduino? [Y/n]: ", "Y")
+            if yn[:1].lower() != "n":
+                args.arduino_serial = devs[0][0]
+        elif args.arduino_serial is None and len(devs) > 1:
+            args.arduino_serial = pick("Which device is the DHT22 Arduino?")
+
+    if args.serial is None:
+        say("No RS485 interface selected: " + (f"server tries its default {DEFAULT_SERIAL}, else SIMULATION MODE."
+                                               if DEFAULT_SERIAL else "SIMULATION MODE."))
+        say("Pass --serial ... to use a specific device.")
+    else:
+        say(f"RS485:   {args.serial}")
+    if args.arduino_serial:
+        say(f"Arduino: {args.arduino_serial}")
+
+def setup_console():
+    """Log Polish text safely even when output goes to a non-UTF-8 file or pipe (e.g. on Windows)."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            if (s.encoding or "").lower().replace("-", "") != "utf8":
+                s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def main():
     ap = argparse.ArgumentParser(description="RG Display Server")
     ap.add_argument("--port", default=8080, type=int)
     ap.add_argument("--bind", default="0.0.0.0", help="Address to listen on (default 0.0.0.0)")
-    ap.add_argument("--serial", default="/dev/ttyAMA0")
+    ap.add_argument("--serial", default=None,
+                    help=f"RS485 display port, e.g. /dev/ttyUSB0 or COM3 (default: {DEFAULT_SERIAL or 'none, simulation'})")
     ap.add_argument("--arduino-serial", default=None, help="Serial port for DHT22 Arduino")
     ap.add_argument("--rs485-gpio", type=int, default=None, help="BCM GPIO pin tied to MAX485 RE+DE for direction control")
+    ap.add_argument("--auto", action="store_true",
+                    help="Detect serial ports and ask which is which (what start.sh / start.bat use)")
+    ap.add_argument("--list-ports", action="store_true", help="List detected serial ports and exit")
     args = ap.parse_args()
+    setup_console()
+
+    if args.list_ports:
+        ports = list_serial_ports()
+        for dev, desc in ports:
+            print(f"{dev}  {desc}".rstrip())
+        if not ports:
+            print("No serial ports found" + ("" if serial is not None else " (pyserial not installed)"))
+        return
+    if args.auto:
+        auto_detect(args)
+    if args.serial is None:
+        args.serial = DEFAULT_SERIAL
 
     load_data()
     load_settings()
@@ -1628,7 +1781,7 @@ def main():
     if args.arduino_serial:
         threading.Thread(target=arduino_reader, args=(args.arduino_serial,), daemon=True).start()
     else:
-        log("No Arduino sensor (use --arduino-serial /dev/... for DHT22)")
+        log("No Arduino sensor (use --arduino-serial, e.g. /dev/ttyACM0 or COM4, for DHT22)")
 
     log(f"WebUI: {HTML_FILE} ({len(load_html())} bytes)")
     threading.Thread(target=display_loop, daemon=True).start()

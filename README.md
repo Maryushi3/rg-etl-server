@@ -15,12 +15,15 @@ HTTP server for controlling R&G LED displays over RS485. Features a web UI with 
 python3 server.py --port 8080
 ```
 
+On Windows, double-click `start.bat` or run it from a terminal (`start.bat --serial COM3`); see [Windows](#windows).
+
 Open http://localhost:8080 in a browser.
 
 ## Requirements
 
-- Python 3.7+ (no other dependencies for simulation mode)
+- Python 3.7+ on Linux, macOS or Windows (no other dependencies for simulation mode)
 - `pyserial` (`pip install pyserial`) to talk to the display / Arduino
+- On Windows also `tzdata` (`pip install tzdata`) so time sync can use named time zones
 - On Raspberry Pi with MAX485: `RPi.GPIO` (`pip install RPi.GPIO`)
 
 ## Raspberry Pi Setup
@@ -49,15 +52,27 @@ python3 server.py [--port PORT] [--serial DEVICE] [--arduino-serial DEVICE]
 |------|---------|-------------|
 | `--port` | `8080` | HTTP server port |
 | `--bind` | `0.0.0.0` | Address to listen on (`127.0.0.1` = this machine only) |
-| `--serial` | `/dev/ttyAMA0` | RS485 display serial device. Runs in simulation mode if not found, and connects automatically when the device appears (e.g. USB adapter plugged in later or re-plugged). |
+| `--serial` | `/dev/ttyAMA0` (none on Windows) | RS485 display serial device, e.g. `/dev/ttyUSB0` or `COM3`. Runs in simulation mode if not found, and connects automatically when the device appears (e.g. USB adapter plugged in later or re-plugged). |
 | `--arduino-serial` | *(none)* | Serial port for DHT22 temperature/humidity sensor |
 | `--rs485-gpio` | *(none)* | BCM GPIO pin tied to MAX485 RE+DE for direction control |
+| `--auto` | off | Detect serial devices and ask which is which (what the launchers use) |
+| `--list-ports` | | Print the detected serial ports and exit |
 
-## start.sh
+## start.sh / start.bat
 
-The `start.sh` script auto-detects USB serial devices and interactively prompts you to assign each one (RS485 display or DHT22 Arduino). Supports macOS and Linux. Override detection with `--serial` or `--arduino-serial`. Change the HTTP port with `--port N` or the `PORT` environment variable.
+The launchers run `server.py --auto`, which detects USB serial devices (and the Pi's UART + RPi.GPIO, using GPIO 26 for direction) and asks you to assign each one (RS485 display or DHT22 Arduino). `start.sh` is for Linux and macOS, `start.bat` for Windows. Override detection with `--serial` or `--arduino-serial`. Change the HTTP port with `--port N` or the `PORT` environment variable.
 
 When run without a terminal (e.g. from systemd) it never prompts; pass the devices explicitly there.
+
+## Windows
+
+1. Install Python 3 from python.org (tick "Add python.exe to PATH").
+2. `py -m pip install pyserial tzdata`
+3. Plug in the USB-RS485 adapter. FTDI and CP210x adapters install their drivers automatically; cheap CH340 ones may need the CH340 driver.
+4. Run `start.bat` and pick the COM ports, or pass them: `start.bat --serial COM3 --arduino-serial COM4`. `start.bat --list-ports` shows what's connected.
+5. Allow Python through Windows Firewall when asked, if phones on the network should reach the web UI.
+
+To start it automatically, create a Task Scheduler task "At log on" that runs `start.bat` with explicit `--serial` / `--arduino-serial` (there's no terminal to answer prompts).
 
 ## Files
 
@@ -65,7 +80,8 @@ When run without a terminal (e.g. from systemd) it never prompts; pass the devic
 |------|---------|
 | `server.py` | HTTP server + RS485 display driver + queue logic |
 | `webui.html` | Single-page web interface |
-| `start.sh` | Interactive device detection launcher |
+| `start.sh` | Launcher for Linux / macOS (device detection via `server.py --auto`) |
+| `start.bat` | Launcher for Windows |
 | `messages.json` | Persisted message queue (gitignored) |
 | `settings.json` | Persisted settings (gitignored) |
 
