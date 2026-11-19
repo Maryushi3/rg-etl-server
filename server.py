@@ -5,7 +5,7 @@ Run: python3 server.py [--port 8080] [--serial /dev/...] [--arduino-serial /dev/
 
 Compatible with Python 3.7+ (Raspberry Pi OS Buster and newer), Linux, macOS and Windows.
 """
-import argparse, glob, json, os, random, signal, sys, threading, time, traceback, unicodedata, uuid
+import argparse, glob, json, math, os, random, signal, sys, threading, time, traceback, unicodedata, uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -448,10 +448,10 @@ def weekday_pl(now):
 def _int(v, default):
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         try:
             return int(float(v))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # OverflowError: inf
             return default
 
 def _clamp(v, lo, hi, default):
@@ -597,10 +597,20 @@ class Display:
                 log("pyserial not installed: SIMULATION MODE (pip install pyserial)")
             return False
         try:
-            s = serial.Serial(self.path, 9600, timeout=2, write_timeout=5)
+            kw = dict(timeout=2, write_timeout=5)
+            if not IS_WINDOWS:
+                kw["exclusive"] = True  # a second server instance can't share the bus (Windows ports are exclusive anyway)
+            try:
+                s = serial.Serial(self.path, 9600, **kw)
+            except (TypeError, ValueError) as e:
+                if "exclusive" not in str(e):
+                    raise
+                kw.pop("exclusive")  # pyserial < 3.3: "unexpected keyword arguments"
+                s = serial.Serial(self.path, 9600, **kw)
             s.rts = False
             time.sleep(0.3)
             self.ser = s
+            self.reset_presence()
             log(f"RS485 on {self.path}")
             return True
         except Exception as e:
@@ -677,7 +687,9 @@ class Display:
                 while time.monotonic() < deadline:
                     buf += ser.read(max(1, ser.in_waiting))
                     for a, data in parse_frames(buf):
-                        if a == 3:  # replies go to the controller (address 0)
+                        # Replies go to the controller (address 0) and echo the command code;
+                        # this skips a late "80" ACK of an earlier text frame.
+                        if a == 3 and data[:2] == bytes(payload[:2]):
                             return data.decode("cp852", errors="replace")
             except Exception as e:
                 log(f"RS485 read failed ({e})")
@@ -688,6 +700,11 @@ class Display:
                 except Exception:
                     pass
             return None
+
+    def reset_presence(self):
+        """Forget the last poll result and check again shortly (new port or display number)."""
+        self.responding, self.firmware = None, None
+        self._next_check = time.monotonic() + 1
 
     def check_presence(self, number, every=30):
         """Poll the configured display now and then; tells "port open" from "display answers"."""
@@ -939,8 +956,10 @@ def arduino_reader(port_path):
                         try:
                             p = line.split()
                             temp_s, hum_s = p[0][2:], p[1][2:]
-                            float(temp_s), float(hum_s)
-                            sensor.set_reading(temp_s, hum_s)
+                            if math.isfinite(float(temp_s)) and math.isfinite(float(hum_s)):
+                                sensor.set_reading(temp_s, hum_s)
+                            else:  # DHT library prints "nan" when a read fails
+                                sensor.set_error()
                         except (ValueError, IndexError):
                             pass
                     elif line == "ERR":
@@ -1072,7 +1091,7 @@ def load_data():
     for m in msgs:
         if not isinstance(m, dict):
             continue
-        if not m.get("id") or m["id"] in seen:
+        if not isinstance(m.get("id"), str) or not m["id"] or m["id"] in seen:
             m["id"] = uuid.uuid4().hex[:8]
         seen.add(m["id"])
         out.append(m)
@@ -1281,8 +1300,18 @@ def display_loop():
 class BadRequest(Exception):
     pass
 
+def _reject_constant(name):
+    raise ValueError(f"{name} is not allowed")  # NaN / Infinity would poison numeric fields
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # Clients dropping the connection (phones switching apps, ConnectionAbortedError on
+        # Windows) are normal; don't fill the log with tracebacks for them.
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError, OSError)):
+            return
+        super().handle_error(request, client_address)
     # On Windows SO_REUSEADDR lets a second server bind the same port silently; avoid that.
     allow_reuse_address = not IS_WINDOWS
 
@@ -1340,6 +1369,7 @@ def status_payload():
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "RGDisplay/2"
+    timeout = 30  # socket timeout: a stalled client can't hold a thread forever
 
     def log_request(self, code="-", size="-"):
         # Keep the log (and the Pi's SD card) quiet: only log changes and errors.
@@ -1372,7 +1402,7 @@ class Handler(BaseHTTPRequestHandler):
         if not raw.strip():
             return want()
         try:
-            data = json.loads(raw.decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant)
         except (ValueError, UnicodeDecodeError) as e:
             raise BadRequest(f"invalid JSON: {e}")
         if not isinstance(data, want):
@@ -1396,7 +1426,7 @@ class Handler(BaseHTTPRequestHandler):
             fn()
         except BadRequest as e:
             self._json({"error": str(e)}, 400)
-        except (BrokenPipeError, ConnectionResetError):
+        except (ConnectionError, TimeoutError):  # includes BrokenPipe/Reset/Aborted (Windows)
             pass
         except Exception as e:
             log("Request error:\n" + traceback.format_exc())
@@ -1446,13 +1476,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- messages --
     def get_messages(self):
-        with state.lock:
-            self._json({"messages": state.messages, "version": state.version})
+        with state.lock:  # snapshot only; never write to the socket while holding the lock
+            data = {"messages": list(state.messages), "version": state.version}
+        self._json(data)
 
     def create_message(self):
         msg = self._body()
         with state.lock:
-            if not msg.get("id") or _find(msg["id"]) is not None:
+            if not isinstance(msg.get("id"), str) or not msg["id"] or _find(msg["id"]) is not None:
                 msg["id"] = state.next_id()
             state.messages.append(msg)
             save_data()
@@ -1528,6 +1559,7 @@ class Handler(BaseHTTPRequestHandler):
         with state.lock:
             state.override = ov
             state.ov_seq += 1
+            state.pending_skip = None  # a skip queued just before must not fire after the override
             if not ov["active"]:
                 state.force_next = True
             state.wake.set()
@@ -1584,16 +1616,22 @@ class Handler(BaseHTTPRequestHandler):
     def update_settings(self):
         b = self._body()
         with state.lock:
+            old_number = state.settings.get("display_number")
             state.settings, errors = coerce_settings(b, state.settings)
             save_settings()
+            if state.settings.get("display_number") != old_number:
+                state.display.reset_presence()
             state.wake.set()
-            self._json(state.settings if not errors else dict(state.settings, _errors=errors))
+            data = state.settings if not errors else dict(state.settings, _errors=errors)
+        self._json(data)
 
     def sync_time(self):
         b = self._body()
         ts = b.get("unix_seconds", 0)
         if not isinstance(ts, (int, float)) or isinstance(ts, bool) or ts <= 0:
             return self._json({"ok": True})
+        if not 946684800 <= ts <= 4102444800:  # 2000..2100; anything else would break every clock calculation
+            raise BadRequest("unix_seconds out of range")
         offset = time.time() - float(ts)
         tz, tz_name = None, None
         name = b.get("tz")
@@ -1604,7 +1642,8 @@ class Handler(BaseHTTPRequestHandler):
                 tz = None
                 log(f"Time zone {name!r} not available ({e}); using a fixed UTC offset"
                     + (". On Windows: pip install tzdata" if IS_WINDOWS else ""))
-        if tz is None and isinstance(b.get("tz_offset_min"), (int, float)):
+        off_min = b.get("tz_offset_min")
+        if tz is None and isinstance(off_min, (int, float)) and not isinstance(off_min, bool) and -1440 < off_min < 1440:
             tz = timezone(timedelta(minutes=b["tz_offset_min"]))
             tz_name = f"UTC{b['tz_offset_min'] / 60:+g}"
         with state.lock:
@@ -1765,6 +1804,13 @@ def main():
     load_data()
     load_settings()
 
+    # Bind first: if the port is taken (another instance?), stop before touching the bus.
+    try:
+        srv = ThreadingHTTPServer((args.bind, args.port), Handler)
+    except OSError as e:
+        log(f"Can't listen on {args.bind}:{args.port} ({e}). Is another instance running? Try --port.")
+        sys.exit(1)
+
     disp = Display(args.serial)
     if args.rs485_gpio is not None:
         if GPIO is not None:
@@ -1790,7 +1836,6 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _term)
 
-    srv = ThreadingHTTPServer((args.bind, args.port), Handler)
     log(f"Server: http://localhost:{args.port}/")
     try:
         srv.serve_forever()

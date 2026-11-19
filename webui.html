@@ -331,7 +331,7 @@ dialog form{display:flex;flex-direction:column;max-height:calc(100dvh - 26px)}
         </dl>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
           <button type="button" class="btn sm" id="btn-scan">Find displays</button>
-          <span class="hint" id="scan-result">Polls addresses 1–63 (about 15 s).</span>
+          <span class="hint" id="scan-result">Polls addresses 1–63 (about 20 s).</span>
         </div>
       </div>
     </div>
@@ -459,17 +459,22 @@ function renderLed(el, parts, emptyText) {
 
 // ---------- State ----------
 let status = null, statusAt = 0, messages = [], msgVersion = -1, autoSynced = false, dragging = false;
+let pollSeq = 0, pollApplied = 0;  // polls overlap (timer + after actions); never render an older answer over a newer one
 const serverNow = () => status ? status.server_time + (performance.now() - statusAt) / 1000 : Date.now() / 1000;
 
 async function poll() {
+  const seq = ++pollSeq;
   try {
     const d = await api('GET', '/api/status');
+    if (seq < pollApplied) return;
+    pollApplied = seq;
     status = d; statusAt = performance.now();
     $('offline').classList.add('hidden');
     if (d.version !== msgVersion) await loadMessages();
     renderStatus();
     maybeAutoSync();
   } catch (e) {
+    if (seq < pollApplied) return;
     $('offline').classList.remove('hidden');
     setPill('p-display', 'bad', 'Offline');
   }
@@ -631,7 +636,7 @@ async function deleteMsg(m) {
 
 // drag to reorder (pointer events: works with mouse and touch)
 $('q-list').addEventListener('pointerdown', e => {
-  const h = e.target.closest('.handle'); if (!h) return;
+  const h = e.target.closest('.handle'); if (!h || e.button !== 0 || dragging) return;
   e.preventDefault();
   const li = h.closest('.qi'), list = $('q-list');
   const before = [...list.children].map(x => x.dataset.id).join();
@@ -754,6 +759,10 @@ function collectCarry() {  // keep the typed main text when switching type
 }
 $('edit-form').addEventListener('input', e => { updateCounters(); if (e.target.id === 'fx-font') fontHint(); schedulePreview(); });
 $('edit-form').addEventListener('change', e => { if (e.target.id === 'f-sched') schedToggle(); if (e.target.id === 'fx-font') fontHint(); schedulePreview(); });
+$('edit-form').addEventListener('keydown', e => {
+  // Enter in a field submits the form, which means "Add to queue"; in "Show now" mode it should show.
+  if (e.key === 'Enter' && edMode === 'override' && e.target.tagName === 'INPUT') { e.preventDefault(); $('edit-show').click(); }
+});
 $('edit-form').addEventListener('submit', async e => {
   e.preventDefault();
   const m = collect();
@@ -854,7 +863,7 @@ function maybeAutoSync() {
   autoSynced = true;
   const skew = Math.abs(status.server_time - Date.now() / 1000);
   const tzDiff = status.utc_offset_min !== -new Date().getTimezoneOffset();
-  if (skew > 60 || tzDiff) syncTime(true).then(() => toast(`Display clock was ${skew > 60 ? 'off by ' + fmtDur(skew) : 'in another time zone'}, synced from this device`));
+  if (skew > 60 || tzDiff) syncTime(true).then(r => r && toast(`Display clock was ${skew > 60 ? 'off by ' + fmtDur(skew) : 'in another time zone'}, synced from this device`));
 }
 
 // ---------- Boot ----------

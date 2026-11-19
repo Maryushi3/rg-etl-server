@@ -169,7 +169,7 @@ Send a hardcoded test string to the display (body is ignored).
 
 ### `POST /api/discover`
 
-Scan the bus for displays: sends a status poll to each address and lists those that answer. Takes about 0.25 s per address (default range 1-63, about 15 s). Needs an RS485 adapter that can also receive.
+Scan the bus for displays: sends a status poll to each address and lists those that answer. Takes about 0.25 s per address (default range 1-63, about 20 s). Needs an RS485 adapter that can also receive.
 
 **Body (optional):** `{ "from": 1, "to": 63 }`
 
