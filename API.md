@@ -189,6 +189,20 @@ Set the clock the server uses for clock/name-day/schedule logic (useful on a Pi 
 
 ---
 
+## System
+
+### `POST /api/poweroff`
+
+Save messages and settings, flush the filesystem, then shut the machine down about 1 s after replying (runs `sudo -n /usr/bin/systemctl poweroff`, so the service user needs passwordless sudo for it). If the command fails, the error is logged to stdout (journald) and the server keeps running.
+
+**Required header:** `X-RG-Confirm: poweroff`. Requests without it get `403`. The header forces a CORS preflight, and the preflight response doesn't allow it, so other web pages can't trigger a shutdown cross-site.
+
+**Response:** `{ "ok": true }`
+
+Wait for the Pi's green LED to stop blinking before unplugging it.
+
+---
+
 ## Settings
 
 ### `PUT /api/settings`

@@ -226,6 +226,7 @@ dialog form{display:flex;flex-direction:column;max-height:calc(100dvh - 26px)}
     <span class="spacer"></span>
     <button class="btn ghost" id="btn-clear" title="Blank the display until the next update"><svg class="i"><use href="#i-eraser"/></svg><span class="lbl">Clear</span></button>
     <button class="btn ghost" id="btn-test" title="Send a test pattern"><svg class="i"><use href="#i-monitor"/></svg><span class="lbl">Test</span></button>
+    <button class="btn danger" id="btn-poweroff" title="Save everything and shut down the Pi"><span class="lbl">Power off</span></button>
   </div>
 </section>
 
@@ -352,11 +353,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const icon = (name, fill) => `<svg class="i${fill ? ' fill' : ''}"><use href="#i-${name}"/></svg>`;
 const MAX_TEXT = 243;
 
-async function api(method, path, body) {
+async function api(method, path, body, headers) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 8000);
   try {
-    const opt = {method, headers: {'Content-Type': 'application/json'}, signal: ctl.signal};
+    const opt = {method, headers: {'Content-Type': 'application/json', ...headers}, signal: ctl.signal};
     if (body !== undefined) opt.body = JSON.stringify(body);
     const r = await fetch(path, opt);
     let d = {};
@@ -793,6 +794,13 @@ $('btn-play').onclick = () => act(() => api('PUT', '/api/settings', {queue_runni
 $('btn-next').onclick = () => act(() => api('POST', '/api/next'));
 $('btn-clear').onclick = () => act(() => api('POST', '/api/clear'));
 $('btn-test').onclick = () => act(() => api('POST', '/api/test'));
+$('btn-poweroff').onclick = async () => {
+  if (!confirm('Power off the Pi?')) return;
+  try { await api('POST', '/api/poweroff', undefined, {'X-RG-Confirm': 'poweroff'}); }
+  catch (e) { return toast(e.message || String(e), true); }
+  shutDown = true;
+  document.body.innerHTML = '<div class="banner warn" style="margin:24px 16px;font-size:1rem">Shutting down... wait for the green LED to stop blinking before unplugging.</div>';
+};
 $('q-random').onclick = () => act(() => api('PUT', '/api/settings', {random_mode: !status?.settings.random_mode}), status?.settings.random_mode ? 'Sequential order' : 'Random order');
 $('ov-stop').onclick = () => act(() => api('POST', '/api/cancel-override'), 'Override stopped');
 $('ov-save').onclick = () => act(async () => {
@@ -869,9 +877,10 @@ function maybeAutoSync() {
 // ---------- Boot ----------
 setupLed($('led-now')); setupLed($('led-edit'));
 poll();
-setInterval(() => { if (!document.hidden) poll(); }, 2000);
-setInterval(tickUi, 250);
-setInterval(() => { if (!dragging && messages.length) renderQueue(); }, 60000);  // refresh schedule chips
+let shutDown = false;  // after power off the DOM is gone; stop the timers touching it
+setInterval(() => { if (!document.hidden && !shutDown) poll(); }, 2000);
+setInterval(() => { if (!shutDown) tickUi(); }, 250);
+setInterval(() => { if (!shutDown && !dragging && messages.length) renderQueue(); }, 60000);  // refresh schedule chips
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 </script>
 </body>

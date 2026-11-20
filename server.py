@@ -5,7 +5,7 @@ Run: python3 server.py [--port 8080] [--serial /dev/...] [--arduino-serial /dev/
 
 Compatible with Python 3.7+ (Raspberry Pi OS Buster and newer), Linux, macOS and Windows.
 """
-import argparse, glob, json, math, os, random, signal, sys, threading, time, traceback, unicodedata, uuid
+import argparse, glob, json, math, os, random, signal, subprocess, sys, threading, time, traceback, unicodedata, uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1050,11 +1050,23 @@ def _atomic_write_json(path, data):
     for attempt in range(5):
         try:
             os.replace(tmp, path)
-            return
         except PermissionError:  # Windows: target briefly open by an editor/antivirus
             if attempt == 4:
                 raise
             time.sleep(0.1)
+        else:
+            break
+    _fsync_dir(os.path.dirname(os.path.abspath(path)))
+
+def _fsync_dir(d):
+    """Make a rename in directory `d` durable (POSIX only; Windows can't open directories)."""
+    if os.name == "nt":
+        return
+    fd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 def _quarantine(path, err):
     bad = f"{path}.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -1436,6 +1448,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+        # Don't add X-RG-Confirm here: leaving it out is what blocks cross-site /api/poweroff.
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -1463,6 +1476,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/skip-to-message": self.skip_to,
             "/api/next": self.next_message,
             "/api/preview": self.preview,
+            "/api/poweroff": self.poweroff,
         })
 
     def do_PUT(self):
@@ -1571,6 +1585,29 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True})
 
     # -- display --
+    def poweroff(self):
+        # Custom header forces a CORS preflight, and do_OPTIONS doesn't allow it, so a
+        # random web page on the LAN can't trigger this; only same-origin requests can.
+        if self.headers.get("X-RG-Confirm", "").strip().lower() != "poweroff":
+            return self._json({"error": "missing X-RG-Confirm: poweroff header"}, 403)
+        log("Power off requested via API")
+        save_data()
+        save_settings()
+        if hasattr(os, "sync"):
+            os.sync()
+        self._json({"ok": True})
+
+        def run():
+            time.sleep(1)
+            cmd = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    log(f"Power off failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()}")
+            except (OSError, subprocess.SubprocessError) as e:
+                log(f"Power off failed: {e}")
+        threading.Thread(target=run, daemon=True).start()
+
     def clear(self):
         state.display.send([], blank=True)
         state.held = "clear"
