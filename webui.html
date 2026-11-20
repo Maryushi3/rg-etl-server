@@ -315,6 +315,16 @@ dialog form{display:flex;flex-direction:column;max-height:calc(100dvh - 26px)}
         <label class="check"><input type="checkbox" id="s-random-mode"> Random order</label>
       </div>
       <div class="fieldset">
+        <h3>Messages</h3>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button type="button" class="btn sm" id="btn-export">Export</button>
+          <button type="button" class="btn sm" id="btn-import-add">Import and add…</button>
+          <button type="button" class="btn sm" id="btn-import-replace">Import and replace…</button>
+          <input type="file" id="import-file" accept=".json,application/json" hidden>
+        </div>
+        <p class="hint" style="margin-top:6px">Files use the messages.json format, so a messages.json from another machine imports as is.</p>
+      </div>
+      <div class="fieldset">
         <h3>Time</h3>
         <dl class="kv">
           <dt>Display clock</dt><dd id="t-server">—</dd>
@@ -801,7 +811,35 @@ $('btn-poweroff').onclick = async () => {
   shutDown = true;
   document.body.innerHTML = '<div class="banner warn" style="margin:24px 16px;font-size:1rem">Shutting down... wait for the green LED to stop blinking before unplugging.</div>';
 };
-$('q-random').onclick = () => act(() => api('PUT', '/api/settings', {random_mode: !status?.settings.random_mode}), status?.settings.random_mode ? 'Sequential order' : 'Random order');
+$('btn-export').onclick = () => {
+  const a = document.createElement('a');
+  a.href = '/api/messages/export';
+  a.download = '';  // the server names the file messages-YYYY-MM-DD.json
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
+let importMode = 'append';
+for (const [id, mode] of [['btn-import-add', 'append'], ['btn-import-replace', 'replace']]) {
+  $(id).onclick = () => { importMode = mode; $('import-file').value = ''; $('import-file').click(); };
+}
+$('import-file').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  let data;
+  try { data = JSON.parse(await f.text()); }
+  catch (_) { return toast(`${f.name} is not a JSON file`, true); }
+  const msgs = Array.isArray(data) ? data : data?.messages;
+  if (!Array.isArray(msgs)) return toast(`${f.name} has no "messages" list`, true);
+  if (importMode === 'replace'
+      && !confirm(`Replace all ${messages.length} messages in the queue with the ${msgs.length} from ${f.name}?`)) return;
+  try {
+    const r = await api('POST', '/api/messages/import', {messages: msgs, mode: importMode});
+    toast(`Imported ${r.imported} message${r.imported === 1 ? '' : 's'}` + (r.skipped ? `, skipped ${r.skipped} invalid` : ''));
+    await loadMessages();
+  } catch (err) { toast(`Import failed: ${err.message}`, true); }
+};
+$('q-random').onclick =() => act(() => api('PUT', '/api/settings', {random_mode: !status?.settings.random_mode}), status?.settings.random_mode ? 'Sequential order' : 'Random order');
 $('ov-stop').onclick = () => act(() => api('POST', '/api/cancel-override'), 'Override stopped');
 $('ov-save').onclick = () => act(async () => {
   const ov = await api('GET', '/api/override');
@@ -817,7 +855,7 @@ $('btn-settings').onclick = () => {
   $('s-keepalive').value = s.keepalive_sec ?? 60;
   $('s-queue-running').checked = s.queue_running !== false;
   $('s-random-mode').checked = !!s.random_mode;
-  $('h-rs485').textContent = status ? (status.display_connected ? `connected (${status.display_port})` : `simulation, ${status.display_port || 'no port'} not available`) : '—';
+  $('h-rs485').textContent = status ? (status.display_connected ? `connected (${status.display_port})` : (status.display_port ? `simulation, ${status.display_port} not available` : 'simulation, no port configured')) : '—';
   $('h-disp').textContent = !status?.display_connected ? '—'
     : status.display_responding === true ? `${status.settings.display_number} answers${status.display_firmware ? `, firmware ${status.display_firmware}` : ''}`
     : status.display_responding === false ? `${status.settings.display_number} doesn't answer status polls` : 'checking…';

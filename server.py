@@ -1096,16 +1096,22 @@ def load_data():
     except Exception as e:
         _quarantine(DATA_FILE, e)
         return
-    seen, out = set(), []
+    state.messages = normalize_messages(msgs)
+    log(f"Loaded {len(state.messages)} messages from {DATA_FILE}")
+
+def normalize_messages(msgs, taken=()):
+    """Keep the objects of `msgs`, each with a unique string id (a new one if missing, invalid or in `taken`)."""
+    seen, out = set(taken), []
     for m in msgs:
         if not isinstance(m, dict):
             continue
         if not isinstance(m.get("id"), str) or not m["id"] or m["id"] in seen:
             m["id"] = uuid.uuid4().hex[:8]
+            while m["id"] in seen:
+                m["id"] = uuid.uuid4().hex[:8]
         seen.add(m["id"])
         out.append(m)
-    state.messages = out
-    log(f"Loaded {len(out)} messages from {DATA_FILE}")
+    return out
 
 def coerce_settings(new, base):
     """Merge validated values from `new` into a copy of `base`. Returns (merged, errors)."""
@@ -1386,11 +1392,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         super().log_request(code, size)
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, headers=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
@@ -1457,6 +1465,7 @@ class Handler(BaseHTTPRequestHandler):
             "/": self._html,
             "/api/status": lambda: self._json(status_payload()),
             "/api/messages": self.get_messages,
+            "/api/messages/export": self.export_messages,
             "/api/settings": lambda: self._json(state.settings),
             "/api/override": lambda: self._json(state.override),
         })
@@ -1467,6 +1476,7 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch({
             "/api/messages": self.create_message,
             "/api/messages/reorder": self.reorder,
+            "/api/messages/import": self.import_messages,
             "/api/test": self.test,
             "/api/discover": self.discover,
             "/api/override": self.set_override,
@@ -1490,6 +1500,34 @@ class Handler(BaseHTTPRequestHandler):
         with state.lock:  # snapshot only; never write to the socket while holding the lock
             data = {"messages": list(state.messages), "version": state.version}
         self._json(data)
+
+    def export_messages(self):
+        """The queue as a file in the messages.json format, offered as a download."""
+        with state.lock:
+            data = {"messages": list(state.messages)}
+        name = f"messages-{now_dt():%Y-%m-%d}.json"
+        self._send(200, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"),
+                   "application/json; charset=utf-8",
+                   {"Content-Disposition": f'attachment; filename="{name}"'})
+
+    def import_messages(self):
+        """Add messages from a messages.json-style file to the queue, or replace the queue with them."""
+        b = self._body()
+        msgs, mode = b.get("messages"), b.get("mode", "append")
+        if not isinstance(msgs, list):
+            raise BadRequest("expected {\"messages\": [...]} (the messages.json format)")
+        if mode not in ("append", "replace"):
+            raise BadRequest("mode must be 'append' or 'replace'")
+        with state.lock:
+            taken = () if mode == "replace" else [m.get("id") for m in state.messages]
+            new = normalize_messages(msgs, taken)
+            if not new:
+                raise BadRequest("no messages in the file")
+            state.messages = new if mode == "replace" else state.messages + new
+            save_data()
+            state.touch()
+            total = len(state.messages)
+        self._json({"ok": True, "imported": len(new), "skipped": len(msgs) - len(new), "count": total})
 
     def create_message(self):
         msg = self._body()

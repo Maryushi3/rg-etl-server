@@ -104,6 +104,20 @@ Reorder the message queue. Messages whose IDs are missing from the list are kept
 
 **Response:** `{ "ok": true }`
 
+### `GET /api/messages/export`
+
+The whole queue as a download (`messages-YYYY-MM-DD.json`), in the `messages.json` format: `{ "messages": [...] }`.
+
+### `POST /api/messages/import`
+
+Adds messages from a file in the `messages.json` format to the queue, or replaces the queue with them.
+
+**Body:** `{ "messages": [...], "mode": "append" | "replace" }` (`mode` defaults to `append`)
+
+Entries that aren't objects are skipped. A missing, invalid or (when appending) already used `id` gets a new one, so importing the same file twice gives two copies. Errors (400): no `messages` list, an unknown `mode`, or no valid messages in the file.
+
+**Response:** `{ "ok": true, "imported": 5, "skipped": 0, "count": 12 }` (`count` = queue length afterwards)
+
 ### `POST /api/skip-to-message?id=<id>`
 
 Jump to a specific message immediately (works for hidden messages and while the queue is paused). Cancels any active override; the queue continues from there.

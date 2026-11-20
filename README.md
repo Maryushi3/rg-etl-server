@@ -127,6 +127,7 @@ Messages cycle in order with a configurable duration (`duration_sec`, default 10
 - **Random mode**: picks a random visible message instead of sequential (never the same one twice in a row)
 - **Scheduling**: per-message time windows (from/to); messages outside their window are skipped
 - **Persistence**: saved to `messages.json` on every mutation
+- **Import / export**: Settings → Messages downloads the queue as a file, or adds/replaces messages from one (same format as `messages.json`, so files move between machines as they are)
 - **Hidden messages**: skipped during normal rotation (still playable with "Show now" / skip)
 - **Live updates**: editing the message that is on screen repaints it immediately; deleting or hiding it moves on. Dynamic presets (clock, name days, DHT22, days to year end) refresh while shown.
 - When nothing is visible (all hidden / outside schedule) the display is blanked.
