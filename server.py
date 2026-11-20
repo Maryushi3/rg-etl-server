@@ -568,6 +568,7 @@ def clear_frames(addr=None):
 # ---- Display (RS485 port + optional MAX485 direction pin) ----
 class Display:
     RETRY_SEC = 10
+    READ_TIMEOUT = 0.03
 
     def __init__(self, path=None, gpio_pin=None):
         self.path = path
@@ -597,7 +598,9 @@ class Display:
                 log("pyserial not installed: SIMULATION MODE (pip install pyserial)")
             return False
         try:
-            kw = dict(timeout=2, write_timeout=5)
+            # Short read timeout set once and never changed: on Windows every timeout change
+            # reconfigures the port, and the CH343 driver then loses the display's reply.
+            kw = dict(timeout=self.READ_TIMEOUT, write_timeout=5)
             if not IS_WINDOWS:
                 kw["exclusive"] = True  # a second server instance can't share the bus (Windows ports are exclusive anyway)
             try:
@@ -680,10 +683,9 @@ class Display:
                 pass
             if not self.write(build_frame(address_bytes(number), payload)).startswith("TX"):
                 return None
-            ser, old_timeout, buf = self.ser, self.ser.timeout, b""
+            ser, buf = self.ser, b""
             deadline = time.monotonic() + timeout
             try:
-                ser.timeout = 0.03
                 while time.monotonic() < deadline:
                     buf += ser.read(max(1, ser.in_waiting))
                     for a, data in parse_frames(buf):
@@ -694,11 +696,6 @@ class Display:
             except Exception as e:
                 log(f"RS485 read failed ({e})")
                 return None
-            finally:
-                try:
-                    ser.timeout = old_timeout
-                except Exception:
-                    pass
             return None
 
     def reset_presence(self):
