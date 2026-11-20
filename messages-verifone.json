@@ -1,0 +1,180 @@
+{
+  "messages": [
+    {
+      "preset_id": "two-static",
+      "text": "Zażółć||gęślą jaźń.",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "deeb1ee2"
+    },
+    {
+      "preset_id": "single-static",
+      "text": "U MNIE DZIAŁA.",
+      "font": 3,
+      "line": 0,
+      "alignment": 1,
+      "id": "8dbcfba3"
+    },
+    {
+      "preset_id": "single-static",
+      "text": "WRZUĆ MONETĘ",
+      "font": 3,
+      "line": 0,
+      "alignment": 1,
+      "id": "21a6315d"
+    },
+    {
+      "preset_id": "single-static",
+      "text": "FREE PLAY",
+      "font": 3,
+      "line": 0,
+      "alignment": 1,
+      "id": "c919d1d9"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "Zbliż kartę,",
+      "_tbs_bottom": "czytnik czuje się samotny.",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "875e0e23"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "Ciekawostka:",
+      "_tbs_bottom": "ten wyświetlacz kiedyś jeździł pociągiem.",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "f9584f99"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "ZGŁASZAJ OBSŁUDZE",
+      "_tbs_bottom": "niesprawne stanowiska",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "bc161dd7"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "ZGŁASZAJ POLICJI",
+      "_tbs_bottom": "bolszewickich podpalaczy",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "bce6695d"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "Czy wiecie, że",
+      "_tbs_bottom": "najpopularniejsza pizza w Szwecji to pizza z kebabem?",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "2904fec2"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "Czy wiesz, że",
+      "_tbs_bottom": "hej to po szwedzku hej?",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "2575a7f6"
+    },
+    {
+      "preset_id": "two-static",
+      "text": "Strzeż tajemnicy||daty n-0",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "417f4e5c"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "TELEGAZETA",
+      "_tbs_bottom": "100 Spis treści * 101 Wiadomości: Rytmikarz żyje * 147 BPM: puls przywrócony * 160 Pogoda: Filary 21 C * 200 Sport: FULL COMBO! * 333 Program: SOUND VOLTEX * 404 Kremówka: nie ma * 500 Ogłoszenia: kupię slider * 573 KONAMI",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "d6631c05"
+    },
+    {
+      "preset_id": "two-static",
+      "text": "Paprykarz||Szczeciński",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "60eeb0e9"
+    },
+    {
+      "preset_id": "bus",
+      "text": "5",
+      "name": "RETRO GRANIE",
+      "_scroll": "Trasa: Szczecin Gł. > Stargard > SCN Filary > ostatnie piętro > jubeat > CHUNITHM > SOUND VOLTEX > Pump It Up",
+      "scroll": 99,
+      "id": "5de5c494"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "UWAGA!",
+      "_tbs_bottom": "Nie uderzaj w przyciski z siłą sugerującą osobisty konflikt z chartem.",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "0838d21e"
+    },
+    {
+      "preset_id": "top-bottom-scroll",
+      "text": "AWARIA?",
+      "_tbs_bottom": "Zawołaj obsługę. Nie każda awaria wymaga restartu, nawet jeśli to najrozsądniejszy ruch.",
+      "_tbs_font_top": 1,
+      "_tbs_font_bottom": 1,
+      "_tbs_scroll": 99,
+      "id": "a9819862"
+    },
+    {
+      "preset_id": "two-static",
+      "text": "FULL COMBO||niegwarantowane",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "2c053a0a"
+    },
+    {
+      "preset_id": "two-static",
+      "text": "OFFSET: +12 ms||(to nie my)",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "2655886d"
+    },
+    {
+      "preset_id": "two-static",
+      "text": "GOOD LUCK.||HAVE FUN.",
+      "font": 1,
+      "alignment": 1,
+      "_ts_font2": 1,
+      "_ts_align2": 1,
+      "id": "5c947f86"
+    },
+    {
+      "preset_id": "scrolling",
+      "text": "HEY! WHY DON'T YOU JUST GET UP AND DANCE, MAN?!",
+      "font": 3,
+      "line": 0,
+      "alignment": 1,
+      "scroll": 99,
+      "id": "d28f5b33"
+    }
+  ]
+}
